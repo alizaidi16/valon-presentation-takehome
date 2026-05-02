@@ -154,7 +154,11 @@ export async function generateSlide(input: GenerateSlideInput): Promise<SlideRes
 
   // Hard override: image. Skip classification, go straight to image model.
   if (formatOverride === "image") {
-    const effectivePrompt = `${prompt}\n\n${styleAppendix}`;
+    const variationLead =
+      variation ?
+        `VARIATION REQUEST: Produce a noticeably different visual treatment — alternate composition, crop, focal emphasis, or negative-space balance while preserving the subject. Avoid repeating a generic template composition.\n\n`
+      : "";
+    const effectivePrompt = `${variationLead}${prompt}\n\n${styleAppendix}`;
     const imageResponse = await client.models.generateContent({
       model: imageModel,
       contents: effectivePrompt,
