@@ -31,6 +31,7 @@ import {
 } from "@/lib/ai/themes";
 import { elapsedSeconds, workingHint } from "@/lib/ui/working-feedback";
 import { TEMPLATE_LIST, type Template } from "@/lib/templates";
+import { HistoryStack } from "@/lib/history/stack";
 
 type SlideStatus = "idle" | "working" | "done" | "error";
 type FormatOverride = "auto" | "image" | "title" | "bullets" | "grid" | "stats";
@@ -78,6 +79,14 @@ type Slide = {
   /** Epoch ms when this slide entered the "working" state. Used to render an
    * elapsed-time counter and to drive the shimmer animation. Cleared on done/error. */
   startedAt?: number;
+};
+
+/** Snapshot persisted in the undo/redo stack. Includes selectedId so undo
+ * restores the cursor too — reordering then undoing without restoring the
+ * selection feels disorienting. */
+type DeckSnapshot = {
+  slides: Slide[];
+  selectedId: string;
 };
 
 type OutlineSlide = {
@@ -269,6 +278,17 @@ export default function Home() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
+  /**
+   * Undo/redo stack. Snapshots before structural mutations only:
+   * add/kill/reorder/template/brief/style-lock. Inline text edits (name,
+   * notes, prompt) are excluded — those would explode the history with
+   * per-keystroke entries, and the textarea's native Cmd+Z covers them.
+   * `historyVersion` bumps after every history op so the Undo/Redo
+   * button disabled state re-evaluates on each render.
+   */
+  const historyRef = useRef(new HistoryStack<DeckSnapshot>(50));
+  const [, bumpHistory] = useState(0);
+
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
 
@@ -347,6 +367,35 @@ export default function Home() {
     }
   }, [selectedSlide, slides]);
 
+  /**
+   * Global Cmd+Z / Cmd+Shift+Z (and Ctrl+Z on non-mac) for undo/redo. We
+   * skip when focus is in an input/textarea/contenteditable so the
+   * platform's native text undo continues to work — that's both expected
+   * by users and avoids fighting the browser for plain text editing.
+   */
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const isModified = event.metaKey || event.ctrlKey;
+      if (!isModified || event.key.toLowerCase() !== "z") return;
+
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName.toLowerCase();
+      if (tag === "input" || tag === "textarea" || target?.isContentEditable) return;
+
+      event.preventDefault();
+      if (event.shiftKey) {
+        doRedo();
+      } else {
+        doUndo();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // doUndo/doRedo close over slides + selectedId; refresh listener when
+    // those change so we always operate on current state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slides, selectedId]);
+
   function patchSlide(id: string, patch: Partial<Slide>) {
     setSlides((current) =>
       current.map((slide) => (slide.id === id ? { ...slide, ...patch } : slide))
@@ -354,6 +403,7 @@ export default function Home() {
   }
 
   function addSlide() {
+    snapshotForUndo();
     const next = makeSlide(slides.length);
     setSlides((current) => [...current, next]);
     setSelectedId(next.id);
@@ -366,6 +416,7 @@ export default function Home() {
       return;
     }
 
+    snapshotForUndo();
     const nextSlides = slides.filter((slide) => slide.id !== id);
     setSlides(nextSlides);
 
@@ -379,12 +430,38 @@ export default function Home() {
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    snapshotForUndo();
     setSlides((current) => {
       const oldIndex = current.findIndex((s) => s.id === active.id);
       const newIndex = current.findIndex((s) => s.id === over.id);
       if (oldIndex === -1 || newIndex === -1) return current;
       return arrayMove(current, oldIndex, newIndex);
     });
+  }
+
+  /** Capture the current deck state on the undo stack. Call this BEFORE
+   * any structural mutation (add/kill/reorder/template/brief). */
+  function snapshotForUndo() {
+    historyRef.current.snapshot({ slides, selectedId });
+    bumpHistory((n) => n + 1);
+  }
+
+  function doUndo() {
+    const restored = historyRef.current.undo({ slides, selectedId });
+    if (!restored) return;
+    setSlides(restored.slides);
+    setSelectedId(restored.selectedId);
+    bumpHistory((n) => n + 1);
+    setMessage("Undone.");
+  }
+
+  function doRedo() {
+    const restored = historyRef.current.redo({ slides, selectedId });
+    if (!restored) return;
+    setSlides(restored.slides);
+    setSelectedId(restored.selectedId);
+    bumpHistory((n) => n + 1);
+    setMessage("Redone.");
   }
 
   /**
@@ -802,6 +879,7 @@ export default function Home() {
         status: "idle"
       }));
 
+      snapshotForUndo();
       setSlides(generatedSlides);
       setSelectedId(generatedSlides[0]?.id ?? "");
       setBriefOpen(false);
@@ -831,6 +909,7 @@ export default function Home() {
       status: "idle"
     }));
 
+    snapshotForUndo();
     setSlides(generatedSlides);
     setSelectedId(generatedSlides[0]?.id ?? "");
     setBriefOpen(false);
@@ -996,6 +1075,26 @@ export default function Home() {
           </div>
 
           <div className="top-actions">
+            <button
+              className="ghost-button icon-button"
+              onClick={doUndo}
+              disabled={!historyRef.current.canUndo()}
+              type="button"
+              title="Undo (⌘Z)"
+              aria-label="Undo"
+            >
+              ↶
+            </button>
+            <button
+              className="ghost-button icon-button"
+              onClick={doRedo}
+              disabled={!historyRef.current.canRedo()}
+              type="button"
+              title="Redo (⌘⇧Z)"
+              aria-label="Redo"
+            >
+              ↷
+            </button>
             <button
               className="ghost-button"
               onClick={() => selectedSlide && killSlide(selectedSlide.id)}

@@ -335,6 +335,13 @@ textarea:focus {
   transform: none;
 }
 
+.icon-button {
+  padding: 8px 12px;
+  font-size: 1.05rem;
+  line-height: 1;
+  font-weight: 400;
+}
+
 .status-bar {
   min-height: 24px;
   font-size: 0.95rem;
