@@ -94,7 +94,21 @@ button {
   background: rgba(255, 255, 255, 0.5);
   text-align: left;
   border-radius: 6px;
-  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  cursor: grab;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.thumb:active {
+  cursor: grabbing;
+}
+
+.thumb.is-dragging {
+  opacity: 0.4;
+  cursor: grabbing;
+  box-shadow: 0 14px 28px rgba(31, 22, 15, 0.18);
+  z-index: 2;
 }
 
 .thumb:hover {

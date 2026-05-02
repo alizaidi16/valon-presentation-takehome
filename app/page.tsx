@@ -1,6 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import {
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { pool } from "@/lib/async/pool";
 import type { Critique } from "@/lib/ai/critique";
 import type { StyleDNA } from "@/lib/ai/extract-style";
@@ -158,6 +175,67 @@ function LayoutSlide({ layout }: { layout: SlideLayout }) {
   return null;
 }
 
+/**
+ * Draggable sidebar thumbnail. Pointer sensor uses an 8-px activation
+ * distance so single clicks still pass through to onClick (the slide-select
+ * handler) — only intentional drags trigger reordering. Keyboard reordering
+ * works too: focus a thumb and use Space + arrow keys.
+ */
+function SortableThumb({
+  slide,
+  index,
+  isActive,
+  onClick
+}: {
+  slide: Slide;
+  index: number;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: slide.id
+  });
+  const isWorking = slide.status === "working";
+  const elapsed = elapsedSeconds(slide.startedAt, Date.now());
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  };
+
+  return (
+    <button
+      ref={setNodeRef}
+      style={style}
+      className={`thumb ${isActive ? "active" : ""} ${isWorking ? "is-working" : ""} status-${slide.status} ${isDragging ? "is-dragging" : ""}`}
+      onClick={onClick}
+      type="button"
+      {...attributes}
+      {...listeners}
+    >
+      <div className="thumb-art">
+        {slide.imageData ? (
+          <img alt={slide.name} src={slide.imageData} draggable={false} />
+        ) : slide.layout ? (
+          <div className="thumb-layout-preview">
+            <span className="thumb-layout-kind">{slide.layout.kind}</span>
+            <span className="thumb-layout-headline">{getLayoutHeadline(slide.layout)}</span>
+          </div>
+        ) : (
+          <span>empty-ish</span>
+        )}
+        {isWorking && <div className="thumb-shimmer" aria-hidden />}
+      </div>
+      <div className="thumb-copy">
+        <strong>
+          {index + 1}. {slide.name}
+        </strong>
+        <span>{isWorking ? `${elapsed}s` : slide.status}</span>
+      </div>
+    </button>
+  );
+}
+
 export default function Home() {
   const [slides, setSlides] = useState<Slide[]>(starterSlides);
   const [selectedId, setSelectedId] = useState<string>("");
@@ -182,6 +260,13 @@ export default function Home() {
    * so the elapsed-time counters keep climbing. State value itself is unused
    * — only its identity matters to React. */
   const [, setTick] = useState(0);
+
+  // dnd-kit: 8-px activation distance lets clicks pass through; only
+  // intentional drags trigger reorder. Keyboard sortable for accessibility.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
@@ -288,6 +373,17 @@ export default function Home() {
     }
 
     setMessage("A page vanished.");
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setSlides((current) => {
+      const oldIndex = current.findIndex((s) => s.id === active.id);
+      const newIndex = current.findIndex((s) => s.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return current;
+      return arrayMove(current, oldIndex, newIndex);
+    });
   }
 
   /**
@@ -836,44 +932,28 @@ export default function Home() {
           </button>
         </div>
 
-        <div className="slide-list">
-          {slides.map((slide, index) => {
-            const isWorking = slide.status === "working";
-            const elapsed = elapsedSeconds(slide.startedAt, Date.now());
-            return (
-              <button
-                className={`thumb ${slide.id === selectedSlide?.id ? "active" : ""} ${
-                  isWorking ? "is-working" : ""
-                } status-${slide.status}`}
-                key={slide.id}
-                onClick={() => setSelectedId(slide.id)}
-                type="button"
-              >
-                <div className="thumb-art">
-                  {slide.imageData ? (
-                    <img alt={slide.name} src={slide.imageData} />
-                  ) : slide.layout ? (
-                    <div className="thumb-layout-preview">
-                      <span className="thumb-layout-kind">{slide.layout.kind}</span>
-                      <span className="thumb-layout-headline">
-                        {getLayoutHeadline(slide.layout)}
-                      </span>
-                    </div>
-                  ) : (
-                    <span>empty-ish</span>
-                  )}
-                  {isWorking && <div className="thumb-shimmer" aria-hidden />}
-                </div>
-                <div className="thumb-copy">
-                  <strong>
-                    {index + 1}. {slide.name}
-                  </strong>
-                  <span>{isWorking ? `${elapsed}s` : slide.status}</span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={slides.map((s) => s.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="slide-list">
+              {slides.map((slide, index) => (
+                <SortableThumb
+                  key={slide.id}
+                  slide={slide}
+                  index={index}
+                  isActive={slide.id === selectedSlide?.id}
+                  onClick={() => setSelectedId(slide.id)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       </aside>
 
       <section className="editor">
