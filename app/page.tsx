@@ -12,6 +12,7 @@ import {
   type Theme,
   type ThemeId
 } from "@/lib/ai/themes";
+import { elapsedSeconds, workingHint } from "@/lib/ui/working-feedback";
 
 type SlideStatus = "idle" | "working" | "done" | "error";
 type FormatOverride = "auto" | "image" | "title" | "bullets" | "grid" | "stats";
@@ -56,6 +57,9 @@ type Slide = {
   /** Loading flag for the critique call. Independent of `status` so a user can
    * critique a done slide without disabling the cook controls. */
   critiquing?: boolean;
+  /** Epoch ms when this slide entered the "working" state. Used to render an
+   * elapsed-time counter and to drive the shimmer animation. Cleared on done/error. */
+  startedAt?: number;
 };
 
 type OutlineSlide = {
@@ -174,6 +178,10 @@ export default function Home() {
    * localStorage so reloads preserve the look. */
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
   const [lockingStyle, setLockingStyle] = useState(false);
+  /** Bumps every 500ms while at least one slide is working. Forces a re-render
+   * so the elapsed-time counters keep climbing. State value itself is unused
+   * — only its identity matters to React. */
+  const [, setTick] = useState(0);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
@@ -237,6 +245,14 @@ export default function Home() {
     root.dataset.theme = theme.id;
   }, [theme]);
 
+  // Drive the elapsed-time counters while any slide is in flight.
+  useEffect(() => {
+    const anyWorking = slides.some((s) => s.status === "working");
+    if (!anyWorking) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), 500);
+    return () => window.clearInterval(id);
+  }, [slides]);
+
   const selectedSlide = slides.find((slide) => slide.id === selectedId) ?? slides[0];
 
   useEffect(() => {
@@ -294,6 +310,7 @@ export default function Home() {
       slideFormat === "auto" ? "best format" : `${slideFormat} layout`;
     patchSlide(slide.id, {
       status: "working",
+      startedAt: Date.now(),
       feedback: variation ? "Trying a different take..." : `Figuring out the ${formatLabel}...`
     });
 
@@ -324,6 +341,7 @@ export default function Home() {
       if (!response.ok || payload.error) {
         patchSlide(slide.id, {
           status: "error",
+          startedAt: undefined,
           feedback: payload.error ?? "Generation failed."
         });
         return { ok: false, reason: payload.error ?? "Generation failed." };
@@ -335,6 +353,7 @@ export default function Home() {
           layout: payload.layout,
           imageData: undefined,
           status: "done",
+          startedAt: undefined,
           feedback: payload.reasoning ?? `Layout: ${payload.layout.kind}`
         });
         return { ok: true };
@@ -346,18 +365,24 @@ export default function Home() {
           imageData: payload.imageData,
           layout: undefined,
           status: "done",
+          startedAt: undefined,
           feedback: payload.reasoning ?? payload.text ?? "Done."
         });
         return { ok: true };
       }
 
-      patchSlide(slide.id, { status: "error", feedback: "Unexpected response from generator." });
+      patchSlide(slide.id, {
+        status: "error",
+        startedAt: undefined,
+        feedback: "Unexpected response from generator."
+      });
       return { ok: false, reason: "Unexpected response from generator." };
     } catch (err) {
       // AbortError: revert to idle so the user can retry; otherwise mark error
       const isAbort = err instanceof DOMException && err.name === "AbortError";
       patchSlide(slide.id, {
         status: isAbort ? "idle" : "error",
+        startedAt: undefined,
         feedback: isAbort ? "Cancelled." : err instanceof Error ? err.message : "Network error."
       });
       return { ok: false, reason: isAbort ? "cancelled" : "network error" };
@@ -812,35 +837,42 @@ export default function Home() {
         </div>
 
         <div className="slide-list">
-          {slides.map((slide, index) => (
-            <button
-              className={`thumb ${slide.id === selectedSlide?.id ? "active" : ""}`}
-              key={slide.id}
-              onClick={() => setSelectedId(slide.id)}
-              type="button"
-            >
-              <div className="thumb-art">
-                {slide.imageData ? (
-                  <img alt={slide.name} src={slide.imageData} />
-                ) : slide.layout ? (
-                  <div className="thumb-layout-preview">
-                    <span className="thumb-layout-kind">{slide.layout.kind}</span>
-                    <span className="thumb-layout-headline">
-                      {getLayoutHeadline(slide.layout)}
-                    </span>
-                  </div>
-                ) : (
-                  <span>empty-ish</span>
-                )}
-              </div>
-              <div className="thumb-copy">
-                <strong>
-                  {index + 1}. {slide.name}
-                </strong>
-                <span>{slide.status}</span>
-              </div>
-            </button>
-          ))}
+          {slides.map((slide, index) => {
+            const isWorking = slide.status === "working";
+            const elapsed = elapsedSeconds(slide.startedAt, Date.now());
+            return (
+              <button
+                className={`thumb ${slide.id === selectedSlide?.id ? "active" : ""} ${
+                  isWorking ? "is-working" : ""
+                } status-${slide.status}`}
+                key={slide.id}
+                onClick={() => setSelectedId(slide.id)}
+                type="button"
+              >
+                <div className="thumb-art">
+                  {slide.imageData ? (
+                    <img alt={slide.name} src={slide.imageData} />
+                  ) : slide.layout ? (
+                    <div className="thumb-layout-preview">
+                      <span className="thumb-layout-kind">{slide.layout.kind}</span>
+                      <span className="thumb-layout-headline">
+                        {getLayoutHeadline(slide.layout)}
+                      </span>
+                    </div>
+                  ) : (
+                    <span>empty-ish</span>
+                  )}
+                  {isWorking && <div className="thumb-shimmer" aria-hidden />}
+                </div>
+                <div className="thumb-copy">
+                  <strong>
+                    {index + 1}. {slide.name}
+                  </strong>
+                  <span>{isWorking ? `${elapsed}s` : slide.status}</span>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </aside>
 
@@ -889,25 +921,52 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="canvas-wrap">
-          <div className="canvas-card">
-            {selectedSlide?.kind === "layout" && selectedSlide.layout ? (
-              <LayoutSlide layout={selectedSlide.layout} />
-            ) : selectedSlide?.imageData ? (
-              <img alt={selectedSlide.name} className="slide-image" src={selectedSlide.imageData} />
-            ) : (
-              <div className="empty-state">
-                <p>No image yet.</p>
-                <span>Prompt it and something should show up here.</span>
+        {(() => {
+          const isWorking = selectedSlide?.status === "working";
+          const elapsed = elapsedSeconds(selectedSlide?.startedAt, Date.now());
+          return (
+            <div className={`canvas-wrap ${isWorking ? "is-working" : ""}`}>
+              <div className={`canvas-card ${isWorking ? "is-working" : ""}`}>
+                {selectedSlide?.kind === "layout" && selectedSlide.layout ? (
+                  <LayoutSlide layout={selectedSlide.layout} />
+                ) : selectedSlide?.imageData ? (
+                  <img
+                    alt={selectedSlide.name}
+                    className="slide-image"
+                    src={selectedSlide.imageData}
+                  />
+                ) : (
+                  <div className="empty-state">
+                    <p>No image yet.</p>
+                    <span>Prompt it and something should show up here.</span>
+                  </div>
+                )}
+                {isWorking && (
+                  <div className="canvas-progress" aria-hidden>
+                    <div className="canvas-shimmer" />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <div className="floating-chip">
-            <span>{selectedSlide?.status ?? "idle"}</span>
-            <span>{selectedSlide?.feedback ?? "Waiting around."}</span>
-          </div>
-        </div>
+              <div className="floating-chip">
+                <span className="floating-chip-status">
+                  {selectedSlide?.status ?? "idle"}
+                  {isWorking && (
+                    <span className="floating-chip-elapsed"> · {elapsed}s</span>
+                  )}
+                </span>
+                <span>
+                  {isWorking
+                    ? workingHint({
+                        suggestedFormat: selectedSlide?.suggestedFormat,
+                        elapsed
+                      })
+                    : selectedSlide?.feedback ?? "Waiting around."}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
 
         <div className="bottom-mess">
           <div className="prompt-card">

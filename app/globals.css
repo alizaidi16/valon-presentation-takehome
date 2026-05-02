@@ -889,6 +889,119 @@ textarea:focus {
   overflow: hidden;
 }
 
+/* ── Live generation feedback ─────────────────────────────── */
+
+.canvas-card.is-working {
+  position: relative;
+}
+
+.canvas-progress {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.canvas-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 0%,
+    transparent 35%,
+    rgba(255, 255, 255, 0.4) 50%,
+    transparent 65%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 2.2s ease-in-out infinite;
+}
+
+@keyframes shimmer-sweep {
+  0% { background-position: 200% 0; }
+  100% { background-position: -100% 0; }
+}
+
+.canvas-card.is-working::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 60% 100%;
+  background-repeat: no-repeat;
+  animation: progress-bar 1.6s ease-in-out infinite;
+}
+
+@keyframes progress-bar {
+  0% { background-position: -60% 0; }
+  100% { background-position: 160% 0; }
+}
+
+.floating-chip-status {
+  text-transform: lowercase;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.floating-chip-elapsed {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.thumb.is-working {
+  border-color: var(--accent);
+}
+
+.thumb-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 0%,
+    transparent 30%,
+    rgba(255, 255, 255, 0.55) 50%,
+    transparent 70%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.thumb-art {
+  position: relative;
+}
+
+.thumb.is-working .thumb-copy span {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.thumb.status-error {
+  border-color: rgba(177, 69, 69, 0.35);
+}
+
+.thumb.status-error .thumb-copy span {
+  color: var(--danger);
+}
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  .canvas-shimmer,
+  .thumb-shimmer,
+  .canvas-card.is-working::after {
+    animation: none;
+  }
+  .canvas-shimmer,
+  .thumb-shimmer {
+    background: rgba(255, 255, 255, 0.18);
+  }
+}
+
 /* ── Theme picker ─────────────────────────────────────────── */
 
 .theme-card {
