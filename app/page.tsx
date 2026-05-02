@@ -32,6 +32,9 @@ import {
 import { elapsedSeconds, workingHint } from "@/lib/ui/working-feedback";
 import { TEMPLATE_LIST, type Template } from "@/lib/templates";
 import { HistoryStack } from "@/lib/history/stack";
+import { normalizeFormat } from "@/lib/ai/helpers";
+import { decodeDeckHash, encodeDeckHash, toSharePayload } from "@/lib/share/deck-url";
+import { isVoiceSupported, startVoiceRecognition, type VoiceController } from "@/lib/voice/recognition";
 
 type SlideStatus = "idle" | "working" | "done" | "error";
 type FormatOverride = "auto" | "image" | "title" | "bullets" | "grid" | "stats";
@@ -79,7 +82,21 @@ type Slide = {
   /** Epoch ms when this slide entered the "working" state. Used to render an
    * elapsed-time counter and to drive the shimmer animation. Cleared on done/error. */
   startedAt?: number;
+  /** Up to 3 alternate image renders from "3 variants". Pick one to keep as `imageData`. */
+  imageVariants?: Array<{ imageData: string; reasoning?: string }>;
+  /** Which entry in `imageVariants` is selected (0..2). Kept in sync with `imageData`. */
+  imageVariantPick?: number;
 };
+
+function slideDisplayImage(slide: Slide | undefined): string | undefined {
+  if (!slide) return undefined;
+  const variants = slide.imageVariants;
+  const pick = slide.imageVariantPick ?? 0;
+  if (variants && variants.length > 0) {
+    return variants[pick]?.imageData ?? slide.imageData;
+  }
+  return slide.imageData;
+}
 
 /** Snapshot persisted in the undo/redo stack. Includes selectedId so undo
  * restores the cursor too — reordering then undoing without restoring the
@@ -101,7 +118,7 @@ type DeckOutline = {
   slides: OutlineSlide[];
 };
 
-const STORAGE_KEY = "valon-presentation-takehome-v5";
+const STORAGE_KEY = "valon-presentation-takehome-v6";
 
 function makeSlide(index: number): Slide {
   return {
@@ -207,6 +224,7 @@ function SortableThumb({
   });
   const isWorking = slide.status === "working";
   const elapsed = elapsedSeconds(slide.startedAt, Date.now());
+  const thumbSrc = slideDisplayImage(slide);
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -224,8 +242,8 @@ function SortableThumb({
       {...listeners}
     >
       <div className="thumb-art">
-        {slide.imageData ? (
-          <img alt={slide.name} src={slide.imageData} draggable={false} />
+        {thumbSrc ? (
+          <img alt={slide.name} src={thumbSrc} draggable={false} />
         ) : slide.layout ? (
           <div className="thumb-layout-preview">
             <span className="thumb-layout-kind">{slide.layout.kind}</span>
@@ -289,35 +307,104 @@ export default function Home() {
   const historyRef = useRef(new HistoryStack<DeckSnapshot>(50));
   const [, bumpHistory] = useState(0);
 
+  const [voiceBriefListening, setVoiceBriefListening] = useState(false);
+  const voiceBriefBaselineRef = useRef("");
+  const voiceBriefControllerRef = useRef<VoiceController | null>(null);
+
+  function stopVoiceBrief() {
+    voiceBriefControllerRef.current?.stop();
+    voiceBriefControllerRef.current = null;
+    setVoiceBriefListening(false);
+  }
+
   useEffect(() => {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
+    return () => {
+      voiceBriefControllerRef.current?.stop();
+    };
+  }, []);
 
-    if (!saved) {
-      const fresh = starterSlides();
-      setSlides(fresh);
-      setSelectedId(fresh[0]?.id ?? "");
-      return;
+  useEffect(() => {
+    if (!briefOpen) {
+      voiceBriefBaselineRef.current = "";
+      stopVoiceBrief();
+    }
+  }, [briefOpen]);
+
+  useEffect(() => {
+    async function hydrate() {
+      const rawHash =
+        typeof window !== "undefined" && window.location.hash.startsWith("#share=")
+          ? window.location.hash.slice("#share=".length)
+          : "";
+
+      if (rawHash) {
+        const decoded = await decodeDeckHash(rawHash);
+        if (
+          decoded &&
+          decoded.theme?.cssVars &&
+          decoded.theme?.pptx &&
+          decoded.slides?.length
+        ) {
+          const nextSlides: Slide[] = decoded.slides.map((s) => ({
+            id: typeof s.id === "string" && s.id.length > 0 ? s.id : crypto.randomUUID(),
+            name: s.name ?? "",
+            prompt: s.prompt ?? "",
+            note: s.note ?? "",
+            suggestedFormat: normalizeFormat(s.suggestedFormat),
+            kind: s.kind === "image" || s.kind === "layout" ? s.kind : undefined,
+            layout: (s.layout ?? undefined) as SlideLayout | undefined,
+            status: "idle",
+            critique: undefined,
+            critiquing: undefined,
+            startedAt: undefined,
+            imageVariants: undefined,
+            imageVariantPick: undefined
+          }));
+          const selId = nextSlides.some((sl) => sl.id === decoded.selectedId)
+            ? decoded.selectedId
+            : (nextSlides[0]?.id ?? "");
+          setSlides(nextSlides);
+          setSelectedId(selId);
+          setTheme(decoded.theme as Theme);
+          historyRef.current.reset();
+          bumpHistory((n) => n + 1);
+          window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          setMessage("Loaded deck from share link (images not included).");
+          return;
+        }
+      }
+
+      const saved = window.localStorage.getItem(STORAGE_KEY);
+
+      if (!saved) {
+        const fresh = starterSlides();
+        setSlides(fresh);
+        setSelectedId(fresh[0]?.id ?? "");
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(saved) as {
+          slides: Slide[];
+          selectedId: string;
+          theme?: Theme;
+        };
+
+        if (parsed.slides?.length) {
+          setSlides(parsed.slides);
+          setSelectedId(parsed.selectedId || parsed.slides[0].id);
+        }
+        if (parsed.theme && parsed.theme.cssVars && parsed.theme.pptx) {
+          setTheme(parsed.theme);
+        }
+      } catch {
+        const fresh = starterSlides();
+        setSlides(fresh);
+        setSelectedId(fresh[0]?.id ?? "");
+      }
     }
 
-    try {
-      const parsed = JSON.parse(saved) as {
-        slides: Slide[];
-        selectedId: string;
-        theme?: Theme;
-      };
-
-      if (parsed.slides?.length) {
-        setSlides(parsed.slides);
-        setSelectedId(parsed.selectedId || parsed.slides[0].id);
-      }
-      if (parsed.theme && parsed.theme.cssVars && parsed.theme.pptx) {
-        setTheme(parsed.theme);
-      }
-    } catch {
-      const fresh = starterSlides();
-      setSlides(fresh);
-      setSelectedId(fresh[0]?.id ?? "");
-    }
+    void hydrate();
   }, []);
 
   useEffect(() => {
@@ -485,6 +572,8 @@ export default function Home() {
     patchSlide(slide.id, {
       status: "working",
       startedAt: Date.now(),
+      imageVariants: undefined,
+      imageVariantPick: undefined,
       feedback: variation ? "Trying a different take..." : `Figuring out the ${formatLabel}...`
     });
 
@@ -538,6 +627,8 @@ export default function Home() {
           kind: "image",
           imageData: payload.imageData,
           layout: undefined,
+          imageVariants: undefined,
+          imageVariantPick: undefined,
           status: "done",
           startedAt: undefined,
           feedback: payload.reasoning ?? payload.text ?? "Done."
@@ -567,10 +658,140 @@ export default function Home() {
     if (!selectedSlide) return;
     if (!selectedSlide.prompt.trim()) {
       setMessage("Needs a prompt first.");
+      return;
     }
     setMessage(variation ? "Trying a variation." : "Cooking...");
     const { ok, reason } = await cookOneSlide(selectedSlide, { variation });
     setMessage(ok ? "Slide ready." : reason ?? "Generation failed.");
+  }
+
+  function toggleVoiceBrief() {
+    if (voiceBriefListening) {
+      stopVoiceBrief();
+      return;
+    }
+    if (!isVoiceSupported()) {
+      setMessage("Voice input works in Chrome, Edge, or Safari — not in Firefox.");
+      return;
+    }
+    voiceBriefBaselineRef.current = briefText;
+    setVoiceBriefListening(true);
+    voiceBriefControllerRef.current = startVoiceRecognition({
+      onTranscript: ({ final, interim }) => {
+        setBriefText(voiceBriefBaselineRef.current + final + interim);
+      },
+      onError: (m) => {
+        setMessage(m);
+        voiceBriefControllerRef.current = null;
+        setVoiceBriefListening(false);
+      },
+      onEnd: () => {
+        voiceBriefControllerRef.current = null;
+        setVoiceBriefListening(false);
+      }
+    });
+  }
+
+  async function copyShareLink() {
+    try {
+      const sid = selectedId || slides[0]?.id || "";
+      const payload = toSharePayload({ slides, selectedId: sid, theme });
+      const enc = await encodeDeckHash(payload);
+      if (typeof enc === "object" && "error" in enc) {
+        setMessage(enc.error);
+        return;
+      }
+      const url = `${window.location.origin}${window.location.pathname}${window.location.search}#share=${enc}`;
+      await navigator.clipboard.writeText(url);
+      setMessage("Share link copied. Opens outline + styles — images not included.");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Couldn't copy link.");
+    }
+  }
+
+  async function exploreImageVariants() {
+    const slide = selectedSlide;
+    if (!slide?.prompt.trim()) {
+      setMessage("Needs a prompt.");
+      return;
+    }
+    const okFormat =
+      slide.suggestedFormat === "image" || slide.kind === "image";
+    if (!okFormat) {
+      setMessage('Use format "image" or cook an image slide first.');
+      return;
+    }
+    if (slide.status === "working") return;
+
+    snapshotForUndo();
+    patchSlide(slide.id, {
+      status: "working",
+      startedAt: Date.now(),
+      imageVariants: undefined,
+      imageVariantPick: undefined,
+      feedback: "Generating 3 visual variants..."
+    });
+
+    try {
+      const body = {
+        prompt: slide.prompt,
+        formatOverride: "image" as const,
+        variation: true,
+        styleAppendix: theme.imagePromptAppendix
+      };
+
+      const responses = await Promise.all(
+        [0, 1, 2].map(() =>
+          fetch("/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          })
+        )
+      );
+
+      const payloads = await Promise.all(responses.map((r) => r.json()));
+
+      const variants: Array<{ imageData: string; reasoning?: string }> = [];
+      for (let i = 0; i < 3; i++) {
+        const r = responses[i];
+        const p = payloads[i] as {
+          error?: string;
+          kind?: string;
+          imageData?: string;
+          reasoning?: string;
+        };
+        if (!r.ok || p.error || p.kind !== "image" || !p.imageData) {
+          patchSlide(slide.id, {
+            status: "error",
+            startedAt: undefined,
+            feedback: p.error ?? `Variant ${i + 1} failed.`
+          });
+          setMessage(p.error ?? "Variant generation failed.");
+          return;
+        }
+        variants.push({ imageData: p.imageData, reasoning: p.reasoning });
+      }
+
+      patchSlide(slide.id, {
+        status: "done",
+        kind: "image",
+        layout: undefined,
+        startedAt: undefined,
+        imageVariants: variants,
+        imageVariantPick: 0,
+        imageData: variants[0].imageData,
+        feedback: variants[0].reasoning ?? "Pick a variant below."
+      });
+      setMessage("Three variants ready — tap A, B, or C.");
+    } catch (e) {
+      patchSlide(slide.id, {
+        status: "error",
+        startedAt: undefined,
+        feedback: e instanceof Error ? e.message : "Network error."
+      });
+      setMessage(e instanceof Error ? e.message : "Network error.");
+    }
   }
 
   /**
@@ -664,7 +885,12 @@ export default function Home() {
    */
   async function critiqueSelectedSlide() {
     if (!selectedSlide) return;
-    if (selectedSlide.status !== "done" || (!selectedSlide.imageData && !selectedSlide.layout)) {
+    const displayForCritique =
+      slideDisplayImage(selectedSlide) ?? selectedSlide.imageData;
+    if (
+      selectedSlide.status !== "done" ||
+      (!displayForCritique && !selectedSlide.layout)
+    ) {
       setMessage("Cook the slide first, then critique.");
       return;
     }
@@ -681,7 +907,10 @@ export default function Home() {
           name: selectedSlide.name,
           notes: selectedSlide.note,
           kind: selectedSlide.kind,
-          imageData: selectedSlide.imageData,
+          imageData:
+            selectedSlide.kind === "image" ?
+              (slideDisplayImage(selectedSlide) ?? selectedSlide.imageData)
+            : selectedSlide.imageData,
           layout: selectedSlide.layout
         })
       });
@@ -713,7 +942,8 @@ export default function Home() {
    * palette via the theme effect above.
    */
   async function lockStyleFromSelectedSlide() {
-    if (!selectedSlide?.imageData) {
+    const src = selectedSlide ? slideDisplayImage(selectedSlide) : undefined;
+    if (!selectedSlide || !src) {
       setMessage("Lock style only works on a generated image slide.");
       return;
     }
@@ -725,7 +955,7 @@ export default function Home() {
       const response = await fetch("/api/extract-style", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageData: selectedSlide.imageData })
+        body: JSON.stringify({ imageData: src })
       });
 
       const payload = (await response.json()) as Partial<StyleDNA> & { error?: string };
@@ -1022,12 +1252,12 @@ export default function Home() {
           <button
             className="ghost-button theme-lock-button"
             type="button"
-            disabled={!selectedSlide?.imageData || lockingStyle}
+            disabled={!slideDisplayImage(selectedSlide) || lockingStyle}
             onClick={() => {
               void lockStyleFromSelectedSlide();
             }}
             title={
-              selectedSlide?.imageData
+              selectedSlide && slideDisplayImage(selectedSlide)
                 ? "Use this slide's palette + style for the rest of the deck"
                 : "Cook an image slide first, then lock its style"
             }
@@ -1116,6 +1346,16 @@ export default function Home() {
             </button>
             <button
               className="ghost-button"
+              onClick={() => {
+                void copyShareLink();
+              }}
+              type="button"
+              title="Compressed link with outlines and theme — image bytes stay local"
+            >
+              Share link
+            </button>
+            <button
+              className="ghost-button"
               disabled={exporting}
               onClick={exportDeck}
               type="button"
@@ -1128,16 +1368,17 @@ export default function Home() {
         {(() => {
           const isWorking = selectedSlide?.status === "working";
           const elapsed = elapsedSeconds(selectedSlide?.startedAt, Date.now());
+          const displayImg = slideDisplayImage(selectedSlide);
           return (
             <div className={`canvas-wrap ${isWorking ? "is-working" : ""}`}>
               <div className={`canvas-card ${isWorking ? "is-working" : ""}`}>
                 {selectedSlide?.kind === "layout" && selectedSlide.layout ? (
                   <LayoutSlide layout={selectedSlide.layout} />
-                ) : selectedSlide?.imageData ? (
+                ) : displayImg ? (
                   <img
                     alt={selectedSlide.name}
                     className="slide-image"
-                    src={selectedSlide.imageData}
+                    src={displayImg}
                   />
                 ) : (
                   <div className="empty-state">
@@ -1168,6 +1409,43 @@ export default function Home() {
                     : selectedSlide?.feedback ?? "Waiting around."}
                 </span>
               </div>
+
+              {selectedSlide &&
+                selectedSlide.imageVariants &&
+                selectedSlide.imageVariants.length > 1 &&
+                selectedSlide.status !== "working" && (
+                  <div className="variant-strip" role="group" aria-label="Image variants">
+                    {selectedSlide.imageVariants.map((v, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className={`variant-thumb ${(selectedSlide.imageVariantPick ?? 0) === i ? "active" : ""}`}
+                        onClick={() =>
+                          patchSlide(selectedSlide.id, {
+                            imageVariantPick: i,
+                            imageData: v.imageData,
+                            feedback: v.reasoning ?? selectedSlide.feedback
+                          })
+                        }
+                      >
+                        <span className="variant-thumb-label">{String.fromCharCode(65 + i)}</span>
+                        <img alt="" src={v.imageData} draggable={false} />
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="ghost-button variant-dismiss"
+                      onClick={() =>
+                        patchSlide(selectedSlide.id, {
+                          imageVariants: undefined,
+                          imageVariantPick: undefined
+                        })
+                      }
+                    >
+                      collapse
+                    </button>
+                  </div>
+                )}
             </div>
           );
         })()}
@@ -1235,9 +1513,26 @@ export default function Home() {
             <button
               className="ghost-button"
               disabled={
+                selectedSlide?.status === "working" ||
+                !(
+                  selectedSlide?.suggestedFormat === "image" ||
+                  selectedSlide?.kind === "image"
+                )
+              }
+              onClick={() => {
+                void exploreImageVariants();
+              }}
+              title="Runs three parallel image generations (different compositions)"
+              type="button"
+            >
+              3 looks
+            </button>
+            <button
+              className="ghost-button"
+              disabled={
                 selectedSlide?.status !== "done" ||
                 selectedSlide.critiquing ||
-                (!selectedSlide.imageData && !selectedSlide.layout)
+                (!slideDisplayImage(selectedSlide) && !selectedSlide?.layout)
               }
               onClick={() => {
                 if (selectedSlide?.critique) {
@@ -1275,6 +1570,7 @@ export default function Home() {
 
       {presenterOpen && slides[presenterIndex] && (() => {
         const slide = slides[presenterIndex];
+        const presenterImg = slideDisplayImage(slide);
         const isFirst = presenterIndex === 0;
         const isLast = presenterIndex === slides.length - 1;
 
@@ -1287,8 +1583,8 @@ export default function Home() {
             <div className="presenter-stage">
               {slide.kind === "layout" && slide.layout ? (
                 <LayoutSlide layout={slide.layout} />
-              ) : slide.imageData ? (
-                <img alt={slide.name} className="presenter-image" src={slide.imageData} />
+              ) : presenterImg ? (
+                <img alt={slide.name} className="presenter-image" src={presenterImg} />
               ) : (
                 <div className="presenter-empty">
                   <p>{slide.name}</p>
@@ -1368,9 +1664,22 @@ export default function Home() {
               prompts, and speaker notes — picking image vs layout for each slide.
             </p>
 
-            <label className="field-label" htmlFor="brief-textarea">
-              The brief
-            </label>
+            <div className="brief-label-row">
+              <label className="field-label brief-label-inline" htmlFor="brief-textarea">
+                The brief
+              </label>
+              {isVoiceSupported() && (
+                <button
+                  type="button"
+                  className={`ghost-button voice-mic-button ${voiceBriefListening ? "active" : ""}`}
+                  onClick={() => toggleVoiceBrief()}
+                  disabled={briefRunning}
+                  aria-pressed={voiceBriefListening}
+                >
+                  {voiceBriefListening ? "Listening…" : "Dictate"}
+                </button>
+              )}
+            </div>
             <textarea
               id="brief-textarea"
               className="brief-textarea"
