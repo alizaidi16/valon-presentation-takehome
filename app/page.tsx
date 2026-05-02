@@ -150,6 +150,9 @@ export default function Home() {
   const [briefRunning, setBriefRunning] = useState(false);
   const [cookingAll, setCookingAll] = useState(false);
   const cookAbortRef = useRef<AbortController | null>(null);
+  const [presenterOpen, setPresenterOpen] = useState(false);
+  const [presenterIndex, setPresenterIndex] = useState(0);
+  const [presenterShowNotes, setPresenterShowNotes] = useState(false);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
@@ -404,6 +407,55 @@ export default function Home() {
     setMessage("Stopping...");
   }
 
+  function openPresenter() {
+    if (!slides.length) return;
+    const startIndex = Math.max(
+      0,
+      slides.findIndex((s) => s.id === selectedId)
+    );
+    setPresenterIndex(startIndex);
+    setPresenterOpen(true);
+  }
+
+  // Keyboard navigation while presenting
+  useEffect(() => {
+    if (!presenterOpen) return;
+
+    function onKey(event: KeyboardEvent) {
+      switch (event.key) {
+        case "Escape":
+          setPresenterOpen(false);
+          break;
+        case "ArrowRight":
+        case " ":
+        case "PageDown":
+          event.preventDefault();
+          setPresenterIndex((i) => Math.min(slides.length - 1, i + 1));
+          break;
+        case "ArrowLeft":
+        case "PageUp":
+          event.preventDefault();
+          setPresenterIndex((i) => Math.max(0, i - 1));
+          break;
+        case "Home":
+          event.preventDefault();
+          setPresenterIndex(0);
+          break;
+        case "End":
+          event.preventDefault();
+          setPresenterIndex(slides.length - 1);
+          break;
+        case "n":
+        case "N":
+          setPresenterShowNotes((v) => !v);
+          break;
+      }
+    }
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [presenterOpen, slides.length]);
+
   async function exportDeck() {
     if (!slides.length) {
       return;
@@ -616,6 +668,15 @@ export default function Home() {
               another one
             </button>
             <button
+              className="loud-button"
+              onClick={openPresenter}
+              disabled={!slides.length}
+              type="button"
+              title="Present (Esc to exit, arrows to navigate, N for notes)"
+            >
+              Present ▶
+            </button>
+            <button
               className="ghost-button"
               disabled={exporting}
               onClick={exportDeck}
@@ -723,6 +784,84 @@ export default function Home() {
 
         <div className="status-bar">{message}</div>
       </section>
+
+      {presenterOpen && slides[presenterIndex] && (() => {
+        const slide = slides[presenterIndex];
+        const isFirst = presenterIndex === 0;
+        const isLast = presenterIndex === slides.length - 1;
+
+        return (
+          <div className="presenter-overlay" onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setPresenterIndex((i) => Math.min(slides.length - 1, i + 1));
+            }
+          }}>
+            <div className="presenter-stage">
+              {slide.kind === "layout" && slide.layout ? (
+                <LayoutSlide layout={slide.layout} />
+              ) : slide.imageData ? (
+                <img alt={slide.name} className="presenter-image" src={slide.imageData} />
+              ) : (
+                <div className="presenter-empty">
+                  <p>{slide.name}</p>
+                  <span>This slide hasn't been cooked yet. Press Esc to exit.</span>
+                </div>
+              )}
+            </div>
+
+            <div className="presenter-chrome">
+              <button
+                className="presenter-nav presenter-prev"
+                onClick={() => setPresenterIndex((i) => Math.max(0, i - 1))}
+                disabled={isFirst}
+                aria-label="Previous slide"
+                type="button"
+              >
+                ←
+              </button>
+
+              <div className="presenter-counter">
+                {presenterIndex + 1} / {slides.length}
+              </div>
+
+              <button
+                className="presenter-nav presenter-next"
+                onClick={() => setPresenterIndex((i) => Math.min(slides.length - 1, i + 1))}
+                disabled={isLast}
+                aria-label="Next slide"
+                type="button"
+              >
+                →
+              </button>
+
+              <button
+                className="presenter-action"
+                onClick={() => setPresenterShowNotes((v) => !v)}
+                type="button"
+                title="Toggle speaker notes (N)"
+              >
+                {presenterShowNotes ? "hide notes" : "notes"}
+              </button>
+
+              <button
+                className="presenter-action presenter-exit"
+                onClick={() => setPresenterOpen(false)}
+                type="button"
+                title="Exit presenter (Esc)"
+              >
+                exit ✕
+              </button>
+            </div>
+
+            {presenterShowNotes && slide.note && (
+              <div className="presenter-notes">
+                <p className="eyebrow">Speaker notes</p>
+                <p>{slide.note}</p>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {briefOpen && (
         <div

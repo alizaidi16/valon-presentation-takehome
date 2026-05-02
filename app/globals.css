@@ -325,6 +325,173 @@ textarea {
   cursor: not-allowed;
 }
 
+/* ── Presenter mode ─────────────────────────────────────────── */
+
+.presenter-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #0a0807;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  animation: presenter-fade 180ms ease-out;
+}
+
+@keyframes presenter-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.presenter-stage {
+  width: min(100%, 1600px);
+  aspect-ratio: 16 / 9;
+  max-height: 92vh;
+  background: var(--paper);
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  cursor: default;
+}
+
+.presenter-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+
+.presenter-empty {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 14px;
+  text-align: center;
+  padding: 60px;
+  font-family: "Comic Sans MS", "Comic Sans", "Chalkboard SE", cursive;
+}
+
+.presenter-empty p {
+  margin: 0;
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.presenter-empty span {
+  opacity: 0.6;
+  font-size: 1rem;
+}
+
+.presenter-chrome {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff7df;
+  font-family: "Comic Sans MS", "Comic Sans", "Chalkboard SE", cursive;
+}
+
+.presenter-nav,
+.presenter-action {
+  background: transparent;
+  border: none;
+  color: #fff7df;
+  font: inherit;
+  font-size: 1rem;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.presenter-nav {
+  font-size: 1.4rem;
+  line-height: 1;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+}
+
+.presenter-nav:hover:not(:disabled),
+.presenter-action:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.presenter-nav:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.presenter-counter {
+  padding: 0 12px;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95rem;
+  opacity: 0.85;
+}
+
+.presenter-action {
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  font-size: 0.85rem;
+}
+
+.presenter-exit {
+  margin-left: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.presenter-notes {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, 90vw);
+  background: rgba(31, 22, 15, 0.92);
+  color: #fff7df;
+  padding: 18px 24px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-family: "Comic Sans MS", "Comic Sans", "Chalkboard SE", cursive;
+  cursor: default;
+  animation: notes-slide-up 160ms ease-out;
+}
+
+@keyframes notes-slide-up {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.presenter-notes .eyebrow {
+  color: rgba(255, 247, 223, 0.6);
+  margin-bottom: 6px;
+}
+
+.presenter-notes p:last-child {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
 /* ── Cook all / Stop / Retry buttons ─────────────────────────── */
 
 .stop-button {
