@@ -201,6 +201,47 @@ await test("returns 400 on empty prompt string", async () => {
   assert(res.status === 400, `Expected 400, got ${res.status}`);
 });
 
+// ── /api/critique error cases ─────────────────────────────────────────────────
+
+console.log("\n── /api/critique — error cases ───────────────────");
+
+await test("returns 400 on missing prompt", async () => {
+  const res = await postJson("/api/critique", { kind: "layout", layout: { kind: "title", headline: "x" } });
+  assert(res.status === 400, `Expected 400, got ${res.status}`);
+});
+
+await test("returns 400 when kind is image but no imageData", async () => {
+  const res = await postJson("/api/critique", { prompt: "test", kind: "image" });
+  assert(res.status === 400, `Expected 400, got ${res.status}`);
+});
+
+if (process.env.GOOGLE_API_KEY) {
+  console.log("\n── /api/critique — live AI ───────────────────────");
+
+  await test("critiques a layout slide and returns shaped JSON", async () => {
+    const res = await postJson("/api/critique", {
+      prompt: "Three product pillars",
+      name: "Pillars",
+      kind: "layout",
+      layout: {
+        kind: "grid",
+        headline: "Our Pillars",
+        items: [
+          { title: "Speed", body: "Fast." },
+          { title: "Trust", body: "Always." },
+          { title: "Simplicity", body: "Clean." }
+        ]
+      }
+    });
+    assert(res.ok, `Expected 200, got ${res.status}: ${await res.text()}`);
+    const body = await res.json();
+    assert(["strong", "good", "needs-work", "weak"].includes(body.overall), `Unexpected overall: ${body.overall}`);
+    assert(typeof body.summary === "string" && body.summary.length > 0, "Missing summary");
+    assert(Array.isArray(body.strengths), "strengths must be array");
+    assert(Array.isArray(body.issues), "issues must be array");
+  });
+}
+
 // ── /api/generate live AI tests (requires GOOGLE_API_KEY) ────────────────────
 
 if (process.env.GOOGLE_API_KEY) {

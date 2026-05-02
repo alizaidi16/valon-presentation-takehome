@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { pool } from "@/lib/async/pool";
+import type { Critique } from "@/lib/ai/critique";
 
 type SlideStatus = "idle" | "working" | "done" | "error";
 type FormatOverride = "auto" | "image" | "title" | "bullets" | "grid" | "stats";
@@ -41,6 +42,11 @@ type Slide = {
   feedback?: string;
   /** Pre-set by deck-from-brief generator; user can still change it via the chips. */
   suggestedFormat?: FormatOverride;
+  /** AI critique result. Persists across slide-switches so the drawer stays useful. */
+  critique?: Critique;
+  /** Loading flag for the critique call. Independent of `status` so a user can
+   * critique a done slide without disabling the cook controls. */
+  critiquing?: boolean;
 };
 
 type OutlineSlide = {
@@ -55,7 +61,7 @@ type DeckOutline = {
   slides: OutlineSlide[];
 };
 
-const STORAGE_KEY = "valon-presentation-takehome-v3";
+const STORAGE_KEY = "valon-presentation-takehome-v4";
 
 function makeSlide(index: number): Slide {
   return {
@@ -153,6 +159,7 @@ export default function Home() {
   const [presenterOpen, setPresenterOpen] = useState(false);
   const [presenterIndex, setPresenterIndex] = useState(0);
   const [presenterShowNotes, setPresenterShowNotes] = useState(false);
+  const [critiquePanelOpen, setCritiquePanelOpen] = useState(false);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
@@ -405,6 +412,55 @@ export default function Home() {
     cookAbortRef.current?.abort();
     cookAbortRef.current = null;
     setMessage("Stopping...");
+  }
+
+  /**
+   * Run AI critique on a slide. Sends the rendered content (image bytes for
+   * image slides, structured layout for layout slides) to the model and
+   * stores the result on `slide.critique`. Auto-opens the drawer on success.
+   */
+  async function critiqueSelectedSlide() {
+    if (!selectedSlide) return;
+    if (selectedSlide.status !== "done" || (!selectedSlide.imageData && !selectedSlide.layout)) {
+      setMessage("Cook the slide first, then critique.");
+      return;
+    }
+
+    patchSlide(selectedSlide.id, { critiquing: true });
+    setMessage("Asking for honest feedback...");
+
+    try {
+      const response = await fetch("/api/critique", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: selectedSlide.prompt,
+          name: selectedSlide.name,
+          notes: selectedSlide.note,
+          kind: selectedSlide.kind,
+          imageData: selectedSlide.imageData,
+          layout: selectedSlide.layout
+        })
+      });
+
+      const payload = (await response.json()) as Critique & { error?: string };
+
+      if (!response.ok || payload.error) {
+        patchSlide(selectedSlide.id, { critiquing: false });
+        setMessage(payload.error ?? "Critique failed.");
+        return;
+      }
+
+      patchSlide(selectedSlide.id, { critiquing: false, critique: payload });
+      setCritiquePanelOpen(true);
+      const issueCount = payload.issues.length;
+      setMessage(
+        `Critique ready: ${payload.overall}. ${issueCount} issue${issueCount === 1 ? "" : "s"} flagged.`
+      );
+    } catch (err) {
+      patchSlide(selectedSlide.id, { critiquing: false });
+      setMessage(err instanceof Error ? err.message : "Critique failed.");
+    }
   }
 
   function openPresenter() {
@@ -767,6 +823,29 @@ export default function Home() {
             >
               Again
             </button>
+            <button
+              className="ghost-button"
+              disabled={
+                selectedSlide?.status !== "done" ||
+                selectedSlide.critiquing ||
+                (!selectedSlide.imageData && !selectedSlide.layout)
+              }
+              onClick={() => {
+                if (selectedSlide?.critique) {
+                  setCritiquePanelOpen(true);
+                } else {
+                  void critiqueSelectedSlide();
+                }
+              }}
+              type="button"
+              title="Get specific, blunt feedback from a presentation coach"
+            >
+              {selectedSlide?.critiquing
+                ? "thinking..."
+                : selectedSlide?.critique
+                ? "View critique"
+                : "Critique"}
+            </button>
             <label className="field-label" htmlFor="note-box">
               Tiny note gutter
             </label>
@@ -936,6 +1015,75 @@ export default function Home() {
             <p className="brief-warn">Heads up: this replaces all current slides.</p>
           </div>
         </div>
+      )}
+
+      {critiquePanelOpen && selectedSlide?.critique && (
+        <aside className="critique-drawer" role="complementary" aria-label="Slide critique">
+          <header className="critique-header">
+            <div>
+              <p className="eyebrow">Critique</p>
+              <h2 className="critique-title">{selectedSlide.name}</h2>
+            </div>
+            <button
+              className="critique-close"
+              onClick={() => setCritiquePanelOpen(false)}
+              aria-label="Close critique"
+              type="button"
+            >
+              ✕
+            </button>
+          </header>
+
+          <div className={`critique-overall critique-overall-${selectedSlide.critique.overall}`}>
+            <span className="critique-verdict">{selectedSlide.critique.overall}</span>
+            <p className="critique-summary">{selectedSlide.critique.summary}</p>
+          </div>
+
+          {selectedSlide.critique.strengths.length > 0 && (
+            <section className="critique-section">
+              <p className="eyebrow">Working</p>
+              <ul className="critique-strengths">
+                {selectedSlide.critique.strengths.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {selectedSlide.critique.issues.length > 0 && (
+            <section className="critique-section">
+              <p className="eyebrow">Issues ({selectedSlide.critique.issues.length})</p>
+              <ul className="critique-issues">
+                {selectedSlide.critique.issues.map((issue, i) => (
+                  <li key={i} className={`critique-issue critique-issue-${issue.severity}`}>
+                    <div className="critique-issue-meta">
+                      <span className="critique-severity">{issue.severity}</span>
+                      <span className="critique-area">{issue.area}</span>
+                    </div>
+                    <p className="critique-message">{issue.message}</p>
+                    {issue.suggestion && (
+                      <p className="critique-suggestion">→ {issue.suggestion}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          <footer className="critique-footer">
+            <button
+              className="ghost-button"
+              onClick={() => {
+                if (selectedSlide) patchSlide(selectedSlide.id, { critique: undefined });
+                void critiqueSelectedSlide();
+              }}
+              disabled={selectedSlide?.critiquing}
+              type="button"
+            >
+              {selectedSlide?.critiquing ? "thinking..." : "Re-critique"}
+            </button>
+          </footer>
+        </aside>
       )}
     </main>
   );
