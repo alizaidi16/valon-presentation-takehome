@@ -30,6 +30,7 @@ import {
   type ThemeId
 } from "@/lib/ai/themes";
 import { elapsedSeconds, workingHint } from "@/lib/ui/working-feedback";
+import { TEMPLATE_LIST, type Template } from "@/lib/templates";
 
 type SlideStatus = "idle" | "working" | "done" | "error";
 type FormatOverride = "auto" | "image" | "title" | "bullets" | "grid" | "stats";
@@ -815,6 +816,30 @@ export default function Home() {
     }
   }
 
+  /**
+   * Drop a template's slides into the deck. Replaces the current deck (same
+   * destructive behavior as deck-from-brief). Templates are deterministic
+   * scaffolds — content still needs the user to click Cook all to fill in.
+   */
+  function applyTemplate(template: Template) {
+    const generatedSlides: Slide[] = template.slides.map((s) => ({
+      id: crypto.randomUUID(),
+      name: s.name,
+      prompt: s.prompt,
+      note: s.notes,
+      suggestedFormat: s.suggestedFormat,
+      status: "idle"
+    }));
+
+    setSlides(generatedSlides);
+    setSelectedId(generatedSlides[0]?.id ?? "");
+    setBriefOpen(false);
+    setBriefText("");
+    setMessage(
+      `Loaded "${template.name}" template (${generatedSlides.length} slides). Click "Cook all" to generate content.`
+    );
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -1298,6 +1323,28 @@ export default function Home() {
             </div>
 
             <p className="brief-warn">Heads up: this replaces all current slides.</p>
+
+            <div className="template-divider">
+              <span>or pick a template</span>
+            </div>
+
+            <div className="template-grid" role="group" aria-label="Deck templates">
+              {TEMPLATE_LIST.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="template-card"
+                  onClick={() => applyTemplate(t)}
+                  disabled={briefRunning}
+                >
+                  <div className="template-card-head">
+                    <span className="template-card-name">{t.name}</span>
+                    <span className="template-card-scope">{t.scope}</span>
+                  </div>
+                  <p className="template-card-blurb">{t.blurb}</p>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

@@ -689,6 +689,93 @@ textarea:focus {
   text-align: right;
 }
 
+.template-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 6px;
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.template-divider::before,
+.template-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.template-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.template-card {
+  text-align: left;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 100ms ease, background 100ms ease, transform 100ms ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.template-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--paper);
+}
+
+.template-card:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.template-card:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.template-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.template-card-name {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+
+.template-card-scope {
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.template-card-blurb {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--ink-soft);
+}
+
+@media (max-width: 600px) {
+  .template-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Layout slides ─────────────────────────────────────────── */
 
 .layout-slide {
