@@ -2,7 +2,7 @@
 
 > Type a brief. Get a deck. Pick the right format for every slide.
 
-This is my submission for the Valon presentation take-home. The starter was an image-only slide builder; I rebuilt the generation pipeline to be **format-aware** and added a **deck-from-brief** flow. A reviewer reading this should expect ~80 tests to pass and a working app in under a minute of setup.
+This is my submission for the Valon presentation take-home. The starter was an image-only slide builder; I rebuilt the generation pipeline to be **format-aware** and added a **deck-from-brief** flow. A reviewer reading this should expect the full vitest suite to pass and a working app in under a minute of setup.
 
 > **Demo:** drop a GIF here at `docs/screenshots/deck-from-brief.gif` showing the full flow — type brief → outline appears → cook a few slides → mixed-format deck.
 
@@ -22,7 +22,10 @@ The original starter would generate one image per slide. That's the wrong format
 - **Live generation feedback** — elapsed-time counter on every working slide, calibrated phase hints based on (kind, elapsed), shimmer animation across the canvas, accent-colored progress bar, and animated thumbnails. Honest about what's happening — no fake server events.
 - **Classifier reasoning surfaced in the UI** — the floating chip on the canvas shows *why* the AI picked the format it did. No more silent failures.
 - **Real PPTX export for layout slides** — proper text layout, not "image overlay with placeholder rectangle." Each layout type has its own pptxgenjs renderer; the active theme's colors flow through.
-- **134-test test suite** — vitest for unit + integration, smoke script for end-to-end against a live dev server. No API key required for the offline tests.
+- **Share link** — copy a compressed `#share=` URL with deck structure, prompts, notes, formats, layout JSON, and the active theme. Image bytes are intentionally omitted (URLs would blow past limits); open the link and **Cook** to regenerate pixels.
+- **3 looks** — for image-format slides, runs three parallel image generations with variation hints, then A/B/C thumbnails under the canvas to pick a winner (thumbnails collapse to a single canonical `imageData`).
+- **Voice brief (dictation)** — Web Speech API toggle in the deck-from-brief overlay (Chrome / Edge / Safari; feature-hidden where unsupported). Streams interim text into the brief textarea.
+- **Vitest suite** — unit + integration tests (including share-hash round-trip where `CompressionStream` exists), smoke script for end-to-end against a live dev server. No API key required for the offline tests.
 
 ---
 
@@ -41,7 +44,7 @@ Optional env vars:
 ## Test it
 
 ```bash
-npm test                  # 134 unit + integration tests, no API key needed
+npm test                  # unit + integration tests, no API key needed
 npm run test:smoke        # end-to-end against http://localhost:3000
 npm run typecheck         # strict TS, zero errors
 ```
