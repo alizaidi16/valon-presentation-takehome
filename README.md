@@ -15,9 +15,14 @@ The original starter would generate one image per slide. That's the wrong format
 - **AI-routed format selection** — every prompt is classified before generation. Image vs `title` / `bullets` / `grid` / `stats`. Layout slides skip the image model entirely (~10x cheaper, ~5x faster).
 - **Deck-from-brief** — input a paragraph (audience, purpose, tone) and get a full outline back: deck title, named slides, refined prompts, pre-set formats, and speaker notes. Click to open the brief overlay from the sidebar.
 - **Per-slide format override** — chip selector lets you force any format if you disagree with the classifier. The chips are bound per-slide, so different slides remember their own choice.
+- **Cook all + tiered concurrency** — fires all idle slides in parallel. Layouts unthrottled; image generation capped at 3 in-flight to respect rate limits. Per-slide progress via the same `status` field; `Stop` aborts in-flight requests; `Retry failed` re-runs only the broken ones.
+- **Presenter mode** — full-screen, keyboard navigation (← → space PgUp/PgDn Home/End Esc), speaker-notes drawer (toggle with `N`).
+- **AI slide critique** — multimodal "Critique" button that sends image slides back to the model so it actually sees what it's grading. Returns structured feedback (overall verdict + 0-5 strengths + 0-5 issues with severity, area, and a concrete suggested fix), rendered in a slide-in side drawer.
+- **Theme system + Style Lock** — three preset themes (`editorial`, `monochrome`, `pitch`) plus a "Lock style from this slide" button that extracts a style DNA (palette + mood + image-prompt appendix) from any generated image and applies it across the rest of the deck. One abstraction controls layout slide CSS, image-prompt appendix, and PPTX colors in lockstep — so the same deck stays visually coherent end-to-end.
+- **Live generation feedback** — elapsed-time counter on every working slide, calibrated phase hints based on (kind, elapsed), shimmer animation across the canvas, accent-colored progress bar, and animated thumbnails. Honest about what's happening — no fake server events.
 - **Classifier reasoning surfaced in the UI** — the floating chip on the canvas shows *why* the AI picked the format it did. No more silent failures.
-- **Real PPTX export for layout slides** — proper text layout, not "image overlay with placeholder rectangle." Each layout type has its own pptxgenjs renderer.
-- **80-test test suite** — vitest for unit + integration, smoke script for end-to-end against a live dev server. No API key required for the offline tests.
+- **Real PPTX export for layout slides** — proper text layout, not "image overlay with placeholder rectangle." Each layout type has its own pptxgenjs renderer; the active theme's colors flow through.
+- **134-test test suite** — vitest for unit + integration, smoke script for end-to-end against a live dev server. No API key required for the offline tests.
 
 ---
 
@@ -36,7 +41,7 @@ Optional env vars:
 ## Test it
 
 ```bash
-npm test                  # 80 unit + integration tests, no API key needed
+npm test                  # 134 unit + integration tests, no API key needed
 npm run test:smoke        # end-to-end against http://localhost:3000
 npm run typecheck         # strict TS, zero errors
 ```
@@ -47,51 +52,50 @@ The smoke script gracefully skips live AI tests when `GOOGLE_API_KEY` isn't set,
 
 ## Architecture
 
-Two AI flows, two routes, all logic in `lib/ai/`. Routes are thin HTTP adapters.
+Four AI flows, four routes, all logic in `lib/ai/`. Routes are thin HTTP adapters.
 
 ```
                     ┌─────────────────────────────────────────┐
-                    │  Browser                                │
-                    │  app/page.tsx (Zustand-free, just      │
-                    │  React state + localStorage)            │
+                    │  Browser — app/page.tsx                 │
+                    │  React state + localStorage             │
+                    │  Active Theme drives image prompts +    │
+                    │  layout slide CSS + PPTX colors         │
                     └────────────┬────────────────────────────┘
                                  │
-              ┌──────────────────┼──────────────────┐
-              ▼                                     ▼
-   POST /api/generate                    POST /api/deck-from-brief
-   { prompt, formatOverride }            { brief, slideCount? }
-              │                                     │
-              ▼                                     ▼
-   ┌──────────────────────┐              ┌──────────────────────┐
-   │ lib/ai/              │              │ lib/ai/              │
-   │   generate-slide.ts  │              │   generate-outline.ts│
-   └──────────┬───────────┘              └──────────┬───────────┘
-              │                                     │
-              ├─ formatOverride !== "auto"          │
-              │  → skip classifier                  │
-              │                                     │
-              ├─ classifier (Gemini Flash-Lite)     │
-              │  → returns { type: "image",         │
-              │              "imagePrompt", ... }   │
-              │    or { type: "layout", ... }       │
-              │                                     │
-              ├─ if image:                          │
-              │   image model (Gemini 3 Pro Image)  │
-              │   → base64 PNG                      │
-              │                                     │
-              └─ if layout:                         │
-                 → return content directly,         │
-                   no image call                    │
-                                                    │
-                                            outline (Gemini Flash-Lite)
-                                            → { deckTitle, slides[] }
-                                              with suggestedFormat
-                                              pre-set per slide
+   ┌─────────────────┬───────────┴──────────┬─────────────────────┐
+   ▼                 ▼                      ▼                     ▼
+POST /api/      POST /api/           POST /api/             POST /api/
+generate        deck-from-brief      critique               extract-style
+{prompt,        {brief,              {prompt, kind,         {imageData}
+ format,        slideCount?}          imageData|layout}
+ styleAppendix}
+   │                 │                      │                     │
+   ▼                 ▼                      ▼                     ▼
+generate-slide   generate-outline      critique              extract-style
+.ts              .ts                   .ts                   .ts
+   │                 │                      │                     │
+   ├ classifier      → outline (Flash-Lite) ├ image: send         ├ VLM call
+   │  (Flash-Lite)     → { deckTitle,       │  rendered PNG       │  with image
+   │                     slides[] with      │  as inlineData      │  + structured
+   ├ image path:        suggestedFormat,    │                     │  output prompt
+   │  image model       notes }             ├ layout: send        │
+   │  (Gemini 3 Pro                         │  JSON content       ▼
+   │  Image Preview)                        │              { palette: { paper,
+   │  + styleAppendix                       ▼                       ink, accent },
+   │                                Critique:                  mood,
+   └ layout path:                  { overall, summary,         imagePromptAppendix }
+      content via                     strengths[],                  │
+      Flash-Lite                      issues[{                      ▼
+                                        severity, area,       buildLockedTheme()
+                                        message,              → Theme used as
+                                        suggestion }] }         deck-wide style
 ```
 
 **Why classify first?** Image models cannot render legible body text. Any slide with content the user is meant to *read* — not just look at — must be a layout. The classifier rules and examples live in `lib/ai/generate-slide.ts → buildClassificationPrompt`. The trigger keywords (`agenda`, `metrics`, `list`, `roadmap`, `comparison`) are intentionally short — pattern-matching on examples is more robust than long keyword lists.
 
-**Why Gemini Flash-Lite?** Google specifically pitches it for *"high throughput tasks like classification or summarization at scale"* — exactly our workload. ~10x cheaper than Anthropic Haiku and noticeably faster. We don't need reasoning quality here; the classifier output is constrained JSON.
+**Why Gemini Flash-Lite?** Google specifically pitches it for *"high throughput tasks like classification or summarization at scale"* — exactly our workload. ~10x cheaper than Anthropic Haiku and noticeably faster. We don't need reasoning quality here; the classifier output is constrained JSON. Critique and style extraction reuse the same model — Flash-Lite handles multimodal input fine for these structured tasks.
+
+**Why themes as one abstraction?** A theme bundles `cssVars` (layout slide rendering), `pptx` (export colors), and `imagePromptAppendix` (image generation guidance). When you switch theme, all three flip in lockstep — so an image cooked under "Pitch" sits cleanly next to a stats layout cooked under "Pitch" exports as a "Pitch"-themed PPTX. The "locked" theme is constructed at runtime from a style DNA extracted via the VLM, but follows the same Theme shape, so the rest of the system never knows the difference.
 
 ---
 
@@ -115,11 +119,13 @@ Two AI flows, two routes, all logic in `lib/ai/`. Routes are thin HTTP adapters.
 ```
 app/
   page.tsx                    ← single-page slide builder UI
-  layout.tsx, globals.css
+  layout.tsx, globals.css     ← Inter + Fraunces via next/font; theme CSS vars
   api/
     generate/route.ts         ← thin adapter → lib/ai/generate-slide
     deck-from-brief/route.ts  ← thin adapter → lib/ai/generate-outline
-    export/route.ts           ← PPTX assembly via pptxgenjs
+    critique/route.ts         ← thin adapter → lib/ai/critique
+    extract-style/route.ts    ← thin adapter → lib/ai/extract-style
+    export/route.ts           ← PPTX assembly via pptxgenjs (theme-aware)
 
 lib/
   ai/
@@ -127,9 +133,17 @@ lib/
     helpers.ts                ← stripFences, extractText, normalizeFormat, types
     generate-slide.ts         ← classifier + image/layout dispatch
     generate-outline.ts       ← deck-from-brief logic
+    critique.ts               ← multimodal slide critique
+    extract-style.ts          ← VLM style DNA extraction from an image
+    themes.ts                 ← Theme type, presets, buildLockedTheme
+  ui/
+    working-feedback.ts       ← elapsed-time + workingHint helpers (pure)
+  async/
+    pool.ts                   ← bounded-concurrency pool with abort support
 
 tests/
-  unit/                       ← pure functions (helpers, classifier prompt invariants)
+  unit/                       ← pure functions (helpers, classifier invariants,
+                                themes, working-feedback, pool)
   integration/                ← route handlers with @google/genai mocked
 
 scripts/
@@ -142,11 +156,11 @@ scripts/
 
 Top three only. Everything else is in [`PARKING_LOT.md`](PARKING_LOT.md).
 
-1. **Style themes / visual DNA.** A theme picker (editorial, deck-builder default, dark, etc.) that controls the layout slide CSS, the PPTX export palette, and the image-prompt appendix as one unit. Plus an "extract from slide 1" mode that pulls the palette + composition style from the first generated image and reuses it for the rest of the deck. Fixes the "every slide looks like a different designer" problem and lets users override the in-house aesthetic. See `PARKING_LOT.md → Option C` for the detailed design.
-2. **Variants per slide.** Instead of "Again" replacing the current image, show 3 variants side-by-side. Standard creative-tool pattern.
-3. **Voice-to-deck.** Whisper API → brief textarea → outline → deck. High wow factor and the architecture supports it cleanly (just another input that produces a brief string).
+1. **Variants per slide.** Instead of "Again" replacing the current image, show 3 variants side-by-side. Standard creative-tool pattern. The backend already supports `variation: true` — this is mostly a UI change.
+2. **Voice-to-deck.** Whisper API → brief textarea → outline → deck. High wow factor and the architecture supports it cleanly (just another input that produces a brief string).
+3. **Drag-to-reorder slides.** With deck-from-brief producing 5-10 slides at once, reorder is now a real ergonomic gap. `@dnd-kit/sortable` is the reach.
 
-Already shipped: AI-routed format selection, deck-from-brief, per-slide format chips, Cook all (tiered concurrency), Presenter mode (keyboard nav + speaker notes), and the visual reset described above.
+Already shipped: AI-routed format selection, deck-from-brief, per-slide format chips, Cook all (tiered concurrency), Presenter mode (keyboard nav + speaker notes), AI slide critique (multimodal), Theme system + Style Lock from any slide (visual DNA extraction), Live generation feedback (elapsed timer + shimmer), and the visual reset.
 
 ---
 

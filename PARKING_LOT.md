@@ -6,62 +6,13 @@ Format per item: **what / why now / size / sketch.** Sized in rough hour buckets
 
 ---
 
-## Option C — Style themes (visual DNA system)
+## Real streaming (server-pushed phase events)
 
-> The deferred half of "fix the cheesy aesthetic." We did Option A (rip out Comic Sans + clashing colors, replace with one tasteful default). Option C is the bigger move: make the look *swappable*.
+**What:** Replace the client-side elapsed-time + calibrated-hint feedback (already shipped) with real server-side events so the UI can show classifier-finished, image-started, image-decoded as they happen.
 
-**Why it matters.** The starter shipped with one hard-coded look. Even after the cleanup, the user still gets exactly one look. A real product needs at least: the in-house default, a "client wants something dark," and "match my brand." Plus, by far the biggest aesthetic problem with image-generated decks is *intra-deck inconsistency* — every slide looks like a different designer. A theme system that controls both layout slides AND image prompts in lockstep solves both problems with one abstraction.
+**Why later:** Gemini's image API doesn't stream today. Would require either (a) emitting our own SSE events around each model call from the route handler — useful but only as fast as the slowest call — or (b) waiting for upstream streaming support. The shipped honest-elapsed-time UX captures most of the perceived-speed benefit; this is the next step when we want true progress signals.
 
-**Size:** L (full day to ship 2-3 themes plus the picker; image-DNA extraction is another half-day).
-
-**Sketch:**
-
-```ts
-// lib/ai/themes.ts
-export type Theme = {
-  id: string;
-  name: string;
-  // CSS custom properties applied to <html>
-  cssVars: Record<string, string>;
-  // PPTX export colors (hex without #)
-  pptx: { ink: string; inkSoft: string; accent: string; paper: string; rule: string };
-  // Image prompt appendix
-  imagePromptAppendix: string;
-  // Font pairing
-  fonts: { sans: string; display: string };
-};
-
-export const THEMES: Record<string, Theme> = {
-  editorial: { /* current default — cream + terracotta + Inter/Fraunces */ },
-  monochrome: { /* deep ink on warm white, no accent, big serif */ },
-  pitch: { /* dark navy bg, white ink, electric blue accent, sans-only */ },
-  brand: { /* user-supplied — picker */ }
-};
-```
-
-Layered on top, an "extract from image" mode:
-
-1. User generates the first image slide.
-2. We send that image back to a VLM with a structured-output prompt: `{ palette: [hex, hex, hex], style: string, mood: string }`.
-3. We construct a *derived theme* from that response and stick it in `THEMES.fromSlide1` for the rest of the deck.
-4. All subsequent image prompts get the derived `imagePromptAppendix`; layout slides re-render with the derived `cssVars`.
-
-**Open questions to answer before building:**
-- Theme JSON in code vs DB? (Code for v1; DB once we add user accounts.)
-- Should the picker live in the sidebar permanently or in a settings drawer? (Settings drawer — sidebar is already busy.)
-- How do we handle a user changing themes mid-deck? Re-cook all the image slides? (Yes, with a confirmation modal — "this will regenerate N image slides.")
-
-**Why we didn't do it now:** scope. Option A delivers 80% of the perceived improvement in 30 minutes. Option C is a real feature with its own design surface, picker UI, and PPTX rendering matrix. Worth its own PR.
-
----
-
-## Streaming generation (per-slide progress within one slide)
-
-**What:** Stream the image model's output so the user sees the image fade in as it's generated, instead of a 8-15s spinner.
-
-**Why later:** Gemini's image API doesn't support streaming today. Would have to fake it (poll `generateContent` with a smaller `imageSize`, then progressively upscale). The juice/squeeze ratio is bad while the underlying API isn't there.
-
-**Size:** M, gated on Gemini API support.
+**Size:** M for SSE wrapper, L if we want partial-image streaming (gated on Gemini API).
 
 ---
 
