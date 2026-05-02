@@ -889,6 +889,106 @@ textarea:focus {
   overflow: hidden;
 }
 
+/* ── Theme picker ─────────────────────────────────────────── */
+
+.theme-card {
+  margin: 14px 0 18px;
+  padding: 12px 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.4);
+  display: grid;
+  gap: 10px;
+}
+
+.theme-card .eyebrow {
+  margin: 0;
+}
+
+.theme-chips {
+  display: grid;
+  gap: 6px;
+}
+
+.theme-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--rule);
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 4px;
+  text-align: left;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--ink);
+  transition: border-color 100ms ease, background 100ms ease;
+  cursor: pointer;
+}
+
+.theme-chip:hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.theme-chip.active {
+  border-color: var(--accent);
+  background: var(--paper);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.theme-swatch {
+  display: inline-flex;
+  height: 18px;
+  width: 36px;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  flex-shrink: 0;
+}
+
+.theme-swatch span {
+  flex: 1;
+}
+
+.theme-locked-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: var(--accent-soft);
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+}
+
+.theme-locked-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+
+.theme-unlock {
+  background: transparent;
+  border: none;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  text-transform: lowercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.theme-unlock:hover {
+  background: rgba(31, 22, 15, 0.06);
+  color: var(--ink);
+}
+
+.theme-lock-button {
+  font-size: 0.78rem;
+  padding: 8px 10px;
+}
+
 /* ── Critique drawer ─────────────────────────────────────────── */
 
 .critique-drawer {

@@ -201,6 +201,20 @@ await test("returns 400 on empty prompt string", async () => {
   assert(res.status === 400, `Expected 400, got ${res.status}`);
 });
 
+// ── /api/extract-style error cases ────────────────────────────────────────────
+
+console.log("\n── /api/extract-style — error cases ──────────────");
+
+await test("returns 400 on missing imageData", async () => {
+  const res = await postJson("/api/extract-style", {});
+  assert(res.status === 400, `Expected 400, got ${res.status}`);
+});
+
+await test("returns 400 on malformed data URL", async () => {
+  const res = await postJson("/api/extract-style", { imageData: "https://example.com/img.png" });
+  assert(res.status === 400, `Expected 400, got ${res.status}`);
+});
+
 // ── /api/critique error cases ─────────────────────────────────────────────────
 
 console.log("\n── /api/critique — error cases ───────────────────");

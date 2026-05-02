@@ -3,6 +3,15 @@
 import { useEffect, useRef, useState } from "react";
 import { pool } from "@/lib/async/pool";
 import type { Critique } from "@/lib/ai/critique";
+import type { StyleDNA } from "@/lib/ai/extract-style";
+import {
+  buildLockedTheme,
+  DEFAULT_THEME,
+  PRESET_THEME_LIST,
+  getPresetTheme,
+  type Theme,
+  type ThemeId
+} from "@/lib/ai/themes";
 
 type SlideStatus = "idle" | "working" | "done" | "error";
 type FormatOverride = "auto" | "image" | "title" | "bullets" | "grid" | "stats";
@@ -61,7 +70,7 @@ type DeckOutline = {
   slides: OutlineSlide[];
 };
 
-const STORAGE_KEY = "valon-presentation-takehome-v4";
+const STORAGE_KEY = "valon-presentation-takehome-v5";
 
 function makeSlide(index: number): Slide {
   return {
@@ -160,6 +169,11 @@ export default function Home() {
   const [presenterIndex, setPresenterIndex] = useState(0);
   const [presenterShowNotes, setPresenterShowNotes] = useState(false);
   const [critiquePanelOpen, setCritiquePanelOpen] = useState(false);
+  /** Active deck theme. Either a preset (selected via the theme picker) or
+   * a "locked" theme extracted from a generated image slide. Persisted to
+   * localStorage so reloads preserve the look. */
+  const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
+  const [lockingStyle, setLockingStyle] = useState(false);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(STORAGE_KEY);
@@ -172,11 +186,18 @@ export default function Home() {
     }
 
     try {
-      const parsed = JSON.parse(saved) as { slides: Slide[]; selectedId: string };
+      const parsed = JSON.parse(saved) as {
+        slides: Slide[];
+        selectedId: string;
+        theme?: Theme;
+      };
 
       if (parsed.slides?.length) {
         setSlides(parsed.slides);
         setSelectedId(parsed.selectedId || parsed.slides[0].id);
+      }
+      if (parsed.theme && parsed.theme.cssVars && parsed.theme.pptx) {
+        setTheme(parsed.theme);
       }
     } catch {
       const fresh = starterSlides();
@@ -192,9 +213,29 @@ export default function Home() {
 
     window.localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ slides, selectedId: selectedId || slides[0].id })
+      JSON.stringify({ slides, selectedId: selectedId || slides[0].id, theme })
     );
-  }, [slides, selectedId]);
+  }, [slides, selectedId, theme]);
+
+  /**
+   * Apply the active theme by writing its CSS custom properties onto
+   * <html>. Layout slides + UI surfaces read these vars from globals.css,
+   * so a single theme change re-skins everything visible.
+   */
+  useEffect(() => {
+    const root = document.documentElement;
+    const v = theme.cssVars;
+    root.style.setProperty("--bg", v.bg);
+    root.style.setProperty("--paper", v.paper);
+    root.style.setProperty("--ink", v.ink);
+    root.style.setProperty("--ink-soft", v.inkSoft);
+    root.style.setProperty("--ink-muted", v.inkMuted);
+    root.style.setProperty("--rule", v.rule);
+    root.style.setProperty("--rule-strong", v.ruleStrong);
+    root.style.setProperty("--accent", v.accent);
+    root.style.setProperty("--accent-soft", v.accentSoft);
+    root.dataset.theme = theme.id;
+  }, [theme]);
 
   const selectedSlide = slides.find((slide) => slide.id === selectedId) ?? slides[0];
 
@@ -264,7 +305,10 @@ export default function Home() {
         body: JSON.stringify({
           prompt: slide.prompt,
           variation,
-          formatOverride: slideFormat
+          formatOverride: slideFormat,
+          // Image generations get the active theme's appendix so the deck
+          // stays visually coherent. Layout slides ignore this server-side.
+          styleAppendix: theme.imagePromptAppendix
         })
       });
 
@@ -463,6 +507,56 @@ export default function Home() {
     }
   }
 
+  /**
+   * Extract a style DNA from the selected slide's image and use it as the
+   * deck-wide theme. All future image generations will use the extracted
+   * imagePromptAppendix and the layout slides re-skin to the extracted
+   * palette via the theme effect above.
+   */
+  async function lockStyleFromSelectedSlide() {
+    if (!selectedSlide?.imageData) {
+      setMessage("Lock style only works on a generated image slide.");
+      return;
+    }
+
+    setLockingStyle(true);
+    setMessage("Reading the slide's visual DNA...");
+
+    try {
+      const response = await fetch("/api/extract-style", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageData: selectedSlide.imageData })
+      });
+
+      const payload = (await response.json()) as Partial<StyleDNA> & { error?: string };
+
+      if (
+        !response.ok ||
+        payload.error ||
+        !payload.palette ||
+        !payload.imagePromptAppendix
+      ) {
+        setMessage(payload.error ?? "Style extraction failed.");
+        return;
+      }
+
+      const lockedTheme = buildLockedTheme({
+        palette: payload.palette,
+        mood: payload.mood,
+        imagePromptAppendix: payload.imagePromptAppendix
+      });
+      setTheme(lockedTheme);
+      setMessage(
+        `Locked style: ${lockedTheme.name}. New image slides will match this look.`
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "Style extraction failed.");
+    } finally {
+      setLockingStyle(false);
+    }
+  }
+
   function openPresenter() {
     if (!slides.length) return;
     const startIndex = Math.max(
@@ -526,7 +620,8 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: "Valon Presentation Takehome Export",
-          slides
+          slides,
+          theme
         })
       });
 
@@ -662,6 +757,57 @@ export default function Home() {
 
           <button className="ghost-button" onClick={addSlide} type="button">
             Box +
+          </button>
+        </div>
+
+        <div className="theme-card">
+          <p className="eyebrow">Theme</p>
+          <div className="theme-chips" role="group" aria-label="Theme picker">
+            {PRESET_THEME_LIST.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                className={`theme-chip ${theme.id === t.id ? "active" : ""}`}
+                onClick={() => setTheme(t)}
+                title={t.blurb}
+              >
+                <span className="theme-swatch" aria-hidden>
+                  <span style={{ background: t.cssVars.paper }} />
+                  <span style={{ background: t.cssVars.ink }} />
+                  <span style={{ background: t.cssVars.accent }} />
+                </span>
+                <span>{t.name}</span>
+              </button>
+            ))}
+          </div>
+          {theme.id === "locked" && (
+            <div className="theme-locked-row">
+              <span className="theme-locked-label" title={theme.blurb}>
+                ⚲ {theme.name}
+              </span>
+              <button
+                className="theme-unlock"
+                type="button"
+                onClick={() => setTheme(DEFAULT_THEME)}
+              >
+                unlock
+              </button>
+            </div>
+          )}
+          <button
+            className="ghost-button theme-lock-button"
+            type="button"
+            disabled={!selectedSlide?.imageData || lockingStyle}
+            onClick={() => {
+              void lockStyleFromSelectedSlide();
+            }}
+            title={
+              selectedSlide?.imageData
+                ? "Use this slide's palette + style for the rest of the deck"
+                : "Cook an image slide first, then lock its style"
+            }
+          >
+            {lockingStyle ? "reading..." : "Lock style from this slide"}
           </button>
         </div>
 

@@ -24,17 +24,17 @@ import {
   stripFences
 } from "./helpers";
 
-// House style for image-rendered slides. Kept intentionally restrained so generated
-// images sit comfortably alongside the structured layouts (which use Inter + Fraunces
-// on a warm cream ground). When this needs to evolve, see PARKING_LOT.md → "Style themes".
-export const HOUSE_STYLE_APPENDIX = `
-Editorial business-presentation aesthetic. Calm, confident, and uncluttered.
-Composition: generous negative space, balanced layout, single clear focal point.
-Color palette: warm cream background (#f5ecd9), deep navy or charcoal foreground, with at most one muted accent color (terracotta, sage, or muted teal).
-Typography (when text appears in the image): clean modern sans-serif. Never script, never cartoon.
-Avoid stock-art clichés, gradients, drop shadows, glossy 3D, and clip-art icons.
-Treat the image as a single editorial illustration, not a busy infographic.
-`.trim();
+/**
+ * Default house style appendix for image generation. Mirrors the "editorial"
+ * preset in lib/ai/themes.ts. Kept here as a re-export so callers that don't
+ * care about themes (tests, smoke scripts, simple usage) get sensible
+ * defaults without importing the theme system.
+ *
+ * Theme-aware callers should pass `styleAppendix` to override this — that's
+ * how the theme picker and "Lock style from this slide" feature work.
+ */
+import { DEFAULT_THEME } from "./themes";
+export const HOUSE_STYLE_APPENDIX = DEFAULT_THEME.imagePromptAppendix;
 
 export type SlideResult =
   | { kind: "image"; imageData: string; text?: string; reasoning: string }
@@ -126,6 +126,11 @@ export type GenerateSlideInput = {
   prompt: string;
   variation?: boolean;
   formatOverride?: FormatOverride;
+  /** Optional override for the image-prompt appendix. When the deck has a
+   * theme picked or a "locked" style extracted from a previous slide, the
+   * client passes that theme's appendix here so all images in the deck stay
+   * visually coherent. Defaults to HOUSE_STYLE_APPENDIX (editorial). */
+  styleAppendix?: string;
 };
 
 /**
@@ -137,6 +142,7 @@ export async function generateSlide(input: GenerateSlideInput): Promise<SlideRes
   const prompt = input.prompt?.trim();
   const variation = input.variation ?? false;
   const formatOverride: FormatOverride = input.formatOverride ?? "auto";
+  const styleAppendix = input.styleAppendix?.trim() || HOUSE_STYLE_APPENDIX;
 
   if (!prompt) {
     return { error: "Prompt is required.", status: 400 };
@@ -148,7 +154,7 @@ export async function generateSlide(input: GenerateSlideInput): Promise<SlideRes
 
   // Hard override: image. Skip classification, go straight to image model.
   if (formatOverride === "image") {
-    const effectivePrompt = `${prompt}\n\n${HOUSE_STYLE_APPENDIX}`;
+    const effectivePrompt = `${prompt}\n\n${styleAppendix}`;
     const imageResponse = await client.models.generateContent({
       model: imageModel,
       contents: effectivePrompt,
@@ -212,7 +218,7 @@ export async function generateSlide(input: GenerateSlideInput): Promise<SlideRes
     };
   }
 
-  const effectivePrompt = `${classification.imagePrompt}\n\n${HOUSE_STYLE_APPENDIX}`;
+  const effectivePrompt = `${classification.imagePrompt}\n\n${styleAppendix}`;
   const imageResponse = await client.models.generateContent({
     model: imageModel,
     contents: effectivePrompt,
