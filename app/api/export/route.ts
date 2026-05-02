@@ -19,44 +19,51 @@ type SlidePayload = {
   layout?: LayoutPayload;
 };
 
-const COMIC = "Comic Sans MS";
+// Visual constants. Kept in sync with app/globals.css → :root vars and
+// app/layout.tsx → next/font setup. PPTX font availability varies by OS:
+// Aptos (Microsoft 365 default), Calibri, and Georgia are the most reliable
+// cross-platform fallbacks for the pptxgenjs target audience.
+const SANS = "Aptos";
+const SANS_BOLD = "Aptos Display";
+const SERIF = "Georgia";
 const INK = "1F160F";
-const ACCENT = "CC6035";
-const PINK = "A81457";
-const TEAL = "3F7F92";
+const INK_SOFT = "5C4A3F";
+const ACCENT = "B8553A";
+const PAPER_BG = "FFFAF0";
+const RULE = "D6CDB7";
 
 function addFooter(slide: pptxgen.Slide, data: SlidePayload) {
   slide.addText(data.name || "Untitled slide", {
     x: 0.4,
-    y: 0.25,
+    y: 0.22,
     w: 7.6,
-    h: 0.4,
-    fontFace: "Aptos Display",
-    fontSize: 18,
+    h: 0.35,
+    fontFace: SANS_BOLD,
+    fontSize: 14,
     bold: true,
-    color: "141414",
+    color: INK,
     margin: 0
   });
 
   slide.addText(data.prompt || "", {
     x: 0.4,
-    y: 6.95,
+    y: 7.0,
     w: 8.3,
     h: 0.3,
-    fontFace: "Aptos",
+    fontFace: SANS,
     fontSize: 8,
-    color: "141414",
+    color: INK_SOFT,
     margin: 0
   });
 
   slide.addText(data.note || "", {
     x: 8.95,
-    y: 6.8,
+    y: 6.85,
     w: 4,
     h: 0.45,
-    fontFace: "Aptos",
+    fontFace: SANS,
     fontSize: 8,
-    color: "2B1E16",
+    color: INK_SOFT,
     margin: 0,
     align: "right"
   });
@@ -68,12 +75,13 @@ function renderTitleLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
     y: layout.subtitle ? 1.8 : 2.5,
     w: 11.3,
     h: 2.2,
-    fontFace: COMIC,
-    fontSize: 60,
-    bold: true,
-    color: PINK,
+    fontFace: SERIF,
+    fontSize: 56,
+    bold: false,
+    color: INK,
     align: "center",
-    valign: "middle"
+    valign: "middle",
+    charSpacing: -1
   });
 
   if (layout.subtitle) {
@@ -82,9 +90,9 @@ function renderTitleLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
       y: 4.3,
       w: 10.3,
       h: 1.2,
-      fontFace: COMIC,
-      fontSize: 28,
-      color: INK,
+      fontFace: SANS,
+      fontSize: 24,
+      color: INK_SOFT,
       align: "center",
       valign: "top"
     });
@@ -97,10 +105,11 @@ function renderBulletsLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
     y: 0.7,
     w: 12.3,
     h: 0.85,
-    fontFace: COMIC,
-    fontSize: 36,
-    bold: true,
-    color: ACCENT
+    fontFace: SERIF,
+    fontSize: 32,
+    bold: false,
+    color: INK,
+    charSpacing: -0.5
   });
 
   slide.addShape("line", {
@@ -108,13 +117,13 @@ function renderBulletsLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
     y: 1.6,
     w: 12.3,
     h: 0,
-    line: { color: ACCENT, width: 3 }
+    line: { color: RULE, width: 1 }
   });
 
   const bullets = layout.bullets ?? [];
   const bulletObjects = bullets.map((b) => ({
-    text: `★  ${b}`,
-    options: { paraSpaceAfter: 12 }
+    text: `•  ${b}`,
+    options: { paraSpaceAfter: 14, color: INK }
   }));
 
   slide.addText(bulletObjects, {
@@ -122,8 +131,8 @@ function renderBulletsLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
     y: 1.75,
     w: 12.3,
     h: 5.4,
-    fontFace: COMIC,
-    fontSize: 24,
+    fontFace: SANS,
+    fontSize: 22,
     color: INK,
     valign: "top"
   });
@@ -135,10 +144,11 @@ function renderGridLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
     y: 0.7,
     w: 12.3,
     h: 0.85,
-    fontFace: COMIC,
-    fontSize: 36,
-    bold: true,
-    color: ACCENT
+    fontFace: SERIF,
+    fontSize: 32,
+    bold: false,
+    color: INK,
+    charSpacing: -0.5
   });
 
   const items = layout.items ?? [];
@@ -159,29 +169,38 @@ function renderGridLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
       y,
       w: cardW,
       h: cardH,
-      fill: { color: "FFFFFF", transparency: 40 },
-      line: { color: "2A1A11", width: 2 }
+      fill: { color: "FFFFFF", transparency: 45 },
+      line: { color: RULE, width: 1 }
+    });
+
+    slide.addShape("rect", {
+      x,
+      y,
+      w: cardW,
+      h: 0.05,
+      fill: { color: ACCENT },
+      line: { color: ACCENT, width: 0 }
     });
 
     slide.addText(item.title, {
-      x: x + 0.18,
-      y: y + 0.15,
-      w: cardW - 0.36,
+      x: x + 0.22,
+      y: y + 0.22,
+      w: cardW - 0.44,
       h: 0.55,
-      fontFace: COMIC,
-      fontSize: 20,
-      bold: true,
-      color: TEAL
+      fontFace: SERIF,
+      fontSize: 19,
+      bold: false,
+      color: INK
     });
 
     slide.addText(item.body, {
-      x: x + 0.18,
-      y: y + 0.75,
-      w: cardW - 0.36,
-      h: cardH - 0.95,
-      fontFace: COMIC,
-      fontSize: 14,
-      color: INK,
+      x: x + 0.22,
+      y: y + 0.85,
+      w: cardW - 0.44,
+      h: cardH - 1.05,
+      fontFace: SANS,
+      fontSize: 13,
+      color: INK_SOFT,
       valign: "top"
     });
   });
@@ -196,10 +215,11 @@ function renderStatsLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
       y: 0.7,
       w: 12.3,
       h: 0.85,
-      fontFace: COMIC,
-      fontSize: 36,
-      bold: true,
-      color: ACCENT
+      fontFace: SERIF,
+      fontSize: 32,
+      bold: false,
+      color: INK,
+      charSpacing: -0.5
     });
     startY = 1.75;
   }
@@ -217,7 +237,7 @@ function renderStatsLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
       w: cardW,
       h: cardH,
       fill: { color: "FFFFFF", transparency: 50 },
-      line: { color: ACCENT, width: 3 }
+      line: { color: RULE, width: 1 }
     });
 
     slide.addText(stat.value, {
@@ -225,12 +245,13 @@ function renderStatsLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
       y: startY + cardH * 0.15,
       w: cardW,
       h: cardH * 0.5,
-      fontFace: COMIC,
-      fontSize: 60,
-      bold: true,
-      color: PINK,
+      fontFace: SERIF,
+      fontSize: 56,
+      bold: false,
+      color: ACCENT,
       align: "center",
-      valign: "middle"
+      valign: "middle",
+      charSpacing: -1
     });
 
     slide.addText(stat.label, {
@@ -238,9 +259,9 @@ function renderStatsLayout(slide: pptxgen.Slide, layout: LayoutPayload) {
       y: startY + cardH * 0.68,
       w: cardW,
       h: cardH * 0.28,
-      fontFace: COMIC,
-      fontSize: 18,
-      color: INK,
+      fontFace: SANS,
+      fontSize: 16,
+      color: INK_SOFT,
       align: "center",
       valign: "top"
     });
@@ -284,7 +305,7 @@ export async function POST(request: Request) {
 
     for (const slideData of body.slides) {
       const slide = deck.addSlide();
-      slide.background = { color: "F4E7B8" };
+      slide.background = { color: PAPER_BG };
 
       if (slideData.kind === "layout" && slideData.layout) {
         renderLayoutSlide(slide, slideData.layout);
@@ -302,18 +323,18 @@ export async function POST(request: Request) {
           y: 1.1,
           w: 11.9,
           h: 4.9,
-          fill: { color: "FFF7DC" },
-          line: { color: "2B1E16", width: 1.5 }
+          fill: { color: "FFFFFF" },
+          line: { color: RULE, width: 1 }
         });
-        slide.addText("No image on this slide yet.", {
+        slide.addText("No content on this slide yet.", {
           x: 1.2,
           y: 3.1,
           w: 7.5,
           h: 0.5,
-          fontFace: "Aptos",
-          fontSize: 24,
-          bold: true,
-          color: "2B1E16"
+          fontFace: SANS,
+          fontSize: 22,
+          bold: false,
+          color: INK_SOFT
         });
       }
 

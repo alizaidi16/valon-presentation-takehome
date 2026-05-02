@@ -60,13 +60,13 @@ const STORAGE_KEY = "valon-presentation-takehome-v3";
 function makeSlide(index: number): Slide {
   return {
     id: crypto.randomUUID(),
-    name: `Page ${index + 1}`,
+    name: `Slide ${index + 1}`,
     prompt:
       index === 0
-        ? "An opening slide for a mortgage startup presentation with a bold hero image, a giant title, and extremely eager sales vibes"
+        ? "An editorial title slide for a mortgage startup, with a single hero image and a confident headline"
         : "",
     status: "idle",
-    note: index === 0 ? "House style is locked. Please do not make it tasteful." : ""
+    note: ""
   };
 }
 
@@ -547,8 +547,8 @@ export default function Home() {
     <main className="shell">
       <aside className="sidebar">
         <div className="sidebar-top">
-          <p className="eyebrow">Valon Presentation Takehome</p>
-          <h1>Slides but worse</h1>
+          <p className="eyebrow">Valon Take-home</p>
+          <h1>Slides</h1>
           <button
             className="loud-button"
             onClick={() => setBriefOpen(true)}

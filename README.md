@@ -1,4 +1,4 @@
-# Slides but worse — a Valon take-home
+# Slides — a Valon take-home
 
 > Type a brief. Get a deck. Pick the right format for every slide.
 
@@ -106,6 +106,7 @@ Two AI flows, two routes, all logic in `lib/ai/`. Routes are thin HTTP adapters.
 | **`lib/ai/` separation** | Routes became 25 lines each. Lib functions are pure (input → output, no `Request`/`Response`). Tests can hit them directly without HTTP mocking. |
 | **localStorage for state** | Matches starter spec; no new infra. Per-slide `status` field doubles as a state machine for the upcoming "Cook all" feature. |
 | **No streaming yet** | Deferred. Would require server-side orchestration for diminishing returns at 5-15 slide decks. Listed in "What's next." |
+| **Stripped the starter's joke "cheesy" aesthetic** | The original `HOUSE_STYLE_APPENDIX` told the image model to render in Comic Sans with clashing colors, and `globals.css` matched. Funny once; gets in the way of evaluating real output. Replaced with a restrained editorial palette (cream paper, terracotta accent, Inter + Fraunces). The PPTX export was updated to match. A more advanced theming system (extract palette + style DNA from one image, apply to the rest) is the next step — see [`PARKING_LOT.md`](PARKING_LOT.md). |
 
 ---
 
@@ -139,13 +140,13 @@ scripts/
 
 ## What I'd build next
 
-Listed in priority order. Each one is achievable in a few hours; the structure is set up to support them without further refactoring.
+Top three only. Everything else is in [`PARKING_LOT.md`](PARKING_LOT.md).
 
-1. **Cook all + tiered parallel generation.** Right now the user has to click "Cook" on each slide after `Deck-from-brief` produces an outline. Add a single button that fires all slides in parallel — layouts unthrottled (cheap, fast), image generation capped at 3 in-flight (rate limits). Show progress per slide via the existing `status` field.
-2. **Presenter mode.** Full-screen, keyboard nav. Removes the export step for many use cases.
-3. **Style lock / visual theme.** After the first image is generated, extract its color palette + composition style and inject into all subsequent image prompts. Fixes the "every slide looks like a different designer" problem.
-4. **Variants per slide.** Instead of "Again" replacing the current image, show 3 variants side-by-side. Standard creative-tool pattern.
-5. **Voice-to-deck.** Whisper API → outline → deck. The wow factor is high and the architecture supports it cleanly (just another input that produces a brief).
+1. **Style themes / visual DNA.** A theme picker (editorial, deck-builder default, dark, etc.) that controls the layout slide CSS, the PPTX export palette, and the image-prompt appendix as one unit. Plus an "extract from slide 1" mode that pulls the palette + composition style from the first generated image and reuses it for the rest of the deck. Fixes the "every slide looks like a different designer" problem and lets users override the in-house aesthetic. See `PARKING_LOT.md → Option C` for the detailed design.
+2. **Variants per slide.** Instead of "Again" replacing the current image, show 3 variants side-by-side. Standard creative-tool pattern.
+3. **Voice-to-deck.** Whisper API → brief textarea → outline → deck. High wow factor and the architecture supports it cleanly (just another input that produces a brief string).
+
+Already shipped: AI-routed format selection, deck-from-brief, per-slide format chips, Cook all (tiered concurrency), Presenter mode (keyboard nav + speaker notes), and the visual reset described above.
 
 ---
 

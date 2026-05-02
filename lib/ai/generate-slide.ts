@@ -24,13 +24,16 @@ import {
   stripFences
 } from "./helpers";
 
+// House style for image-rendered slides. Kept intentionally restrained so generated
+// images sit comfortably alongside the structured layouts (which use Inter + Fraunces
+// on a warm cream ground). When this needs to evolve, see PARKING_LOT.md → "Style themes".
 export const HOUSE_STYLE_APPENDIX = `
-Create the image like an overconfident bad presentation designer made it.
-Always include large visible slide text inside the image itself.
-Render that text in an obvious Comic Sans or Comic Sans-like playful font.
-Use cheesy business-presentation energy, bright primary colors, clashing accents, and slightly awkward composition.
-Prefer corny iconography, stock-art vibes, and unnecessary decorative shapes.
-Do not make it subtle, elegant, or restrained.
+Editorial business-presentation aesthetic. Calm, confident, and uncluttered.
+Composition: generous negative space, balanced layout, single clear focal point.
+Color palette: warm cream background (#f5ecd9), deep navy or charcoal foreground, with at most one muted accent color (terracotta, sage, or muted teal).
+Typography (when text appears in the image): clean modern sans-serif. Never script, never cartoon.
+Avoid stock-art clichés, gradients, drop shadows, glossy 3D, and clip-art icons.
+Treat the image as a single editorial illustration, not a busy infographic.
 `.trim();
 
 export type SlideResult =
