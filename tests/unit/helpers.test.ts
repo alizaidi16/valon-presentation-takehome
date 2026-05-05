@@ -6,7 +6,10 @@ import { describe, it, expect } from "vitest";
 import {
   extractImage,
   extractText,
+  extractFirstJsonObject,
   normalizeFormat,
+  parseDataUrl,
+  parseModelJson,
   stripFences,
   VALID_FORMATS
 } from "../../lib/ai/helpers";
@@ -35,6 +38,42 @@ describe("stripFences", () => {
   it("handles missing closing fence", () => {
     // Real models occasionally truncate — should still strip the opener
     expect(stripFences("```json\n{\"a\":1}")).toBe('{"a":1}');
+  });
+});
+
+describe("extractFirstJsonObject", () => {
+  it("isolates object when prose follows complete JSON", () => {
+    expect(extractFirstJsonObject('{"type":"layout"} Here is extra')).toBe('{"type":"layout"}');
+  });
+
+  it("handles nested structures", () => {
+    expect(
+      extractFirstJsonObject('prefix {"layout":{"kind":"title"},"ok":true}suffix')
+    ).toBe('{"layout":{"kind":"title"},"ok":true}');
+  });
+
+  it("does not treat braces inside strings as structure", () => {
+    expect(
+      extractFirstJsonObject('{"msg":"literal {braces} inside","z":1}trailing')
+    ).toBe('{"msg":"literal {braces} inside","z":1}');
+  });
+
+  it("returns null when there is no object", () => {
+    expect(extractFirstJsonObject("no json here")).toBeNull();
+  });
+});
+
+describe("parseModelJson", () => {
+  it("strips fences when response ends with closing fence", () => {
+    expect(parseModelJson('```json\n{"a":1}\n```')).toEqual({ a: 1 });
+  });
+
+  it("parses first object only when prose follows unfenced JSON", () => {
+    expect(parseModelJson('{"a":1}\nMore text')).toEqual({ a: 1 });
+  });
+
+  it("parses whole string when no trailing junk", () => {
+    expect(parseModelJson('{"b":2}')).toEqual({ b: 2 });
   });
 });
 
@@ -99,6 +138,30 @@ describe("extractImage", () => {
       ]
     };
     expect(extractImage(response)).toBeNull();
+  });
+});
+
+describe("parseDataUrl", () => {
+  it("parses image/png base64 data URLs", () => {
+    expect(parseDataUrl("data:image/png;base64,abcd")).toEqual({
+      mimeType: "image/png",
+      data: "abcd"
+    });
+  });
+
+  it("strips whitespace in base64 payload", () => {
+    expect(parseDataUrl("data:image/jpeg;base64,ab\ncd")).toEqual({
+      mimeType: "image/jpeg",
+      data: "abcd"
+    });
+  });
+
+  it("returns null when not base64", () => {
+    expect(parseDataUrl("data:image/png,plain")).toBeNull();
+  });
+
+  it("returns null on non-data URL", () => {
+    expect(parseDataUrl("https://example.com/x")).toBeNull();
   });
 });
 

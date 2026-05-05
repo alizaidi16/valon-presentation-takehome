@@ -11,7 +11,7 @@
 
 import type { Part } from "@google/genai";
 import { getClient, getTextModel } from "./client";
-import { extractText, type SlideLayout, stripFences } from "./helpers";
+import { extractText, type SlideLayout, parseModelJson } from "./helpers";
 
 export type CritiqueSeverity = "high" | "medium" | "low";
 export type CritiqueArea = "message" | "visual" | "structure" | "fit";
@@ -137,7 +137,7 @@ export async function critiqueSlide(
       config: { responseMimeType: "application/json" }
     });
     rawOutput = extractText(response);
-    parsed = JSON.parse(stripFences(rawOutput));
+    parsed = parseModelJson(rawOutput);
   } catch (err) {
     const detail = err instanceof Error ? err.message : "unknown error";
     return {

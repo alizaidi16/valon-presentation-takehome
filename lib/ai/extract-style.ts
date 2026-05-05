@@ -9,7 +9,7 @@
 
 import type { Part } from "@google/genai";
 import { getClient, getTextModel } from "./client";
-import { extractText, stripFences } from "./helpers";
+import { extractText, parseModelJson } from "./helpers";
 import { sanitizeHex } from "./themes";
 
 export type StyleDNA = {
@@ -75,7 +75,7 @@ export async function extractStyle(
       config: { responseMimeType: "application/json" }
     });
     rawOutput = extractText(response);
-    parsed = JSON.parse(stripFences(rawOutput));
+    parsed = parseModelJson(rawOutput);
   } catch (err) {
     const detail = err instanceof Error ? err.message : "unknown error";
     return {

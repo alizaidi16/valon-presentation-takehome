@@ -5,7 +5,7 @@
  */
 
 import { getClient, getTextModel } from "./client";
-import { extractText, type FormatOverride, normalizeFormat, stripFences } from "./helpers";
+import { extractText, normalizeFormat, parseModelJson, type FormatOverride } from "./helpers";
 
 export type OutlineSlide = {
   name: string;
@@ -115,7 +115,7 @@ export async function generateOutline(
       config: { responseMimeType: "application/json" }
     });
     rawOutput = extractText(response);
-    parsed = JSON.parse(stripFences(rawOutput));
+    parsed = parseModelJson(rawOutput);
   } catch (err) {
     const detail = err instanceof Error ? err.message : "unknown error";
     return {

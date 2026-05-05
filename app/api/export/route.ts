@@ -39,17 +39,22 @@ const SERIF = "Georgia";
 type ThemeColors = Theme["pptx"];
 
 function addFooter(slide: pptxgen.Slide, data: SlidePayload, c: ThemeColors) {
-  slide.addText(data.name || "Untitled slide", {
-    x: 0.4,
-    y: 0.22,
-    w: 7.6,
-    h: 0.35,
-    fontFace: SANS_BOLD,
-    fontSize: 14,
-    bold: true,
-    color: c.ink,
-    margin: 0
-  });
+  const isTitleSlide = data.kind === "layout" && data.layout?.kind === "title";
+
+  /** Title decks carry the headline in-body; omit outline name band at top. */
+  if (!isTitleSlide) {
+    slide.addText(data.name || "Untitled slide", {
+      x: 0.4,
+      y: 0.22,
+      w: 7.6,
+      h: 0.35,
+      fontFace: SANS_BOLD,
+      fontSize: 14,
+      bold: true,
+      color: c.ink,
+      margin: 0
+    });
+  }
 
   slide.addText(data.prompt || "", {
     x: 0.4,

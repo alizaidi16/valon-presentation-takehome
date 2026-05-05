@@ -94,7 +94,7 @@ generate-slide   generate-outline      critique              extract-style
                                         suggestion }] }         deck-wide style
 ```
 
-**Why classify first?** Image models cannot render legible body text. Any slide with content the user is meant to *read* — not just look at — must be a layout. The classifier rules and examples live in `lib/ai/generate-slide.ts → buildClassificationPrompt`. The trigger keywords (`agenda`, `metrics`, `list`, `roadmap`, `comparison`) are intentionally short — pattern-matching on examples is more robust than long keyword lists.
+**Why classify first?** Image models cannot render legible body text. Any slide where the user expects to *read* lists, stats, or paragraphs must be a layout. Title layout is text-on-paper only — if the brief asks for a **hero image, cover shot, or photographic opener** (even alongside a headline), the router must pick the **image** path. Rules and examples live in `lib/ai/generate-slide.ts → buildClassificationPrompt`. Layout trigger keywords (`agenda`, `metrics`, `list`, `roadmap`, `comparison`) apply when they describe the core slide payload, not incidental phrasing next to a dominant visual ask.
 
 **Why Gemini Flash-Lite?** Google specifically pitches it for *"high throughput tasks like classification or summarization at scale"* — exactly our workload. ~10x cheaper than Anthropic Haiku and noticeably faster. We don't need reasoning quality here; the classifier output is constrained JSON. Critique and style extraction reuse the same model — Flash-Lite handles multimodal input fine for these structured tasks.
 
@@ -111,7 +111,7 @@ generate-slide   generate-outline      critique              extract-style
 | **Per-slide `suggestedFormat` field** | Lets deck-from-brief pre-set each slide's format. The chips bind to whatever slide is selected. Cleaner than a global override. |
 | **Fail loud on classifier errors** | Original code silently fell back to image, which produced the Comic Sans hallucination. Now: 502 with the raw model output in the error message — debuggable. |
 | **`lib/ai/` separation** | Routes became 25 lines each. Lib functions are pure (input → output, no `Request`/`Response`). Tests can hit them directly without HTTP mocking. |
-| **localStorage for state** | Matches starter spec; no new infra. Per-slide `status` field doubles as a state machine for the upcoming "Cook all" feature. |
+| **localStorage for state** | Matches starter spec; no new infra. Base64 slides can exceed the browser ~5 MB/origin quota — the app proactively drops image bytes when the snapshot is oversized or `QuotaExceededError` fires (prompts/layouts still persist; heroes survive until reload in the current tab). |
 | **No streaming yet** | Deferred. Would require server-side orchestration for diminishing returns at 5-15 slide decks. Listed in "What's next." |
 | **Stripped the starter's joke "cheesy" aesthetic** | The original `HOUSE_STYLE_APPENDIX` told the image model to render in Comic Sans with clashing colors, and `globals.css` matched. Funny once; gets in the way of evaluating real output. Replaced with a restrained editorial palette (cream paper, terracotta accent, Inter + Fraunces). The PPTX export was updated to match. A more advanced theming system (extract palette + style DNA from one image, apply to the rest) is the next step — see [`PARKING_LOT.md`](PARKING_LOT.md). |
 

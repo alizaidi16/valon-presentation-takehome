@@ -116,12 +116,13 @@ const PROMPT = buildClassificationPrompt("test slide", false);
 const PROMPT_VARIATION = buildClassificationPrompt("test slide", true);
 
 describe("classifier prompt invariants", () => {
-  it("strongly biases toward LAYOUT over IMAGE", () => {
-    expect(PROMPT).toMatch(/strongly prefer LAYOUT/i);
+  it("prioritizes IMAGE when the brief demands hero/visual photography", () => {
+    expect(PROMPT).toMatch(/hero image/i);
+    expect(PROMPT).toMatch(/mortgage startup.*single hero image.*confident headline/i);
   });
 
-  it("explicitly rejects IMAGE for legible body text", () => {
-    expect(PROMPT.toLowerCase()).toContain("image models cannot render legible body text");
+  it("calls out limitations of IMAGE for dense readable text vs flat title layout", () => {
+    expect(PROMPT.toLowerCase()).toMatch(/multi-block text|readable body copy/i);
   });
 
   it("provides concrete examples for all four layout kinds", () => {
@@ -133,7 +134,7 @@ describe("classifier prompt invariants", () => {
 
   it("instructs how to handle compound prompts", () => {
     expect(PROMPT).toMatch(/compound prompts/i);
-    expect(PROMPT).toMatch(/do not default to image/i);
+    expect(PROMPT).toMatch(/main user intent/i);
   });
 
   it("requires JSON-only output (no markdown fences)", () => {
