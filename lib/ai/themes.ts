@@ -50,33 +50,32 @@ export type Theme = {
 const THEMES: Record<Exclude<ThemeId, "locked">, Theme> = {
   editorial: {
     id: "editorial",
-    name: "Editorial",
-    blurb: "Warm cream, deep ink, terracotta accent. The default look.",
+    name: "Brand",
+    blurb: "Matches valon.ai tokens — Valon Gold + Base ramps, serif display / sans UI.",
     cssVars: {
-      bg: "#f4ecd6",
-      paper: "#fffaf0",
-      ink: "#1f160f",
-      inkSoft: "rgba(31, 22, 15, 0.7)",
-      inkMuted: "rgba(31, 22, 15, 0.5)",
-      rule: "rgba(31, 22, 15, 0.16)",
-      ruleStrong: "rgba(31, 22, 15, 0.32)",
-      accent: "#b8553a",
-      accentSoft: "rgba(184, 85, 58, 0.12)"
+      bg: "#f8f6f3",
+      paper: "#ffffff",
+      ink: "#20190f",
+      inkSoft: "rgba(92, 84, 60, 0.9)",
+      inkMuted: "rgba(130, 112, 87, 0.95)",
+      rule: "rgba(35, 24, 16, 0.1)",
+      ruleStrong: "rgba(35, 24, 16, 0.2)",
+      accent: "#e19614",
+      accentSoft: "rgba(225, 150, 20, 0.14)"
     },
     pptx: {
-      paper: "FFFAF0",
-      ink: "1F160F",
-      inkSoft: "5C4A3F",
-      accent: "B8553A",
-      rule: "D6CDB7"
+      paper: "FFFFFF",
+      ink: "20190F",
+      inkSoft: "5C543C",
+      accent: "E19614",
+      rule: "DCD2C6"
     },
     imagePromptAppendix: `
-Editorial business-presentation aesthetic. Calm, confident, and uncluttered.
-Composition: generous negative space, balanced layout, single clear focal point.
-Color palette: warm cream background (#fffaf0), deep navy or charcoal foreground, with at most one muted accent color (terracotta, sage, or muted teal).
-Typography (when text appears in the image): clean modern sans-serif. Never script, never cartoon.
-Avoid stock-art clichés, gradients, drop shadows, glossy 3D, and clip-art icons.
-Treat the image as a single editorial illustration, not a busy infographic.
+Follow the public Valon marketing design language (valon.ai): Valon Gold (#e19614) only for small highlights,
+cream-and-stone Base ramp backgrounds (#fffdfa, #f8f6f3, #ece4dd) and deep Base ink (#20190f, #5c543c for secondary text).
+Composition: generous whitespace, cards defined by soft shadow and subtle tone (no heavy borders),
+large high-contrast serif headlines, clean geometric sans for body and UI when text appears.
+Avoid terracotta/orange that is not the official gold, rainbow gradients, glossy 3D, stock clip-art, and busy dashboards.
 `.trim()
   },
 
@@ -150,6 +149,50 @@ export const PRESET_THEMES = THEMES;
 export const PRESET_THEME_LIST: Theme[] = [THEMES.editorial, THEMES.monochrome, THEMES.pitch];
 
 export const DEFAULT_THEME = THEMES.editorial;
+
+/** True when parsed JSON matches a minimal persisted Theme-like object. */
+function isThemeShape(raw: unknown): raw is Partial<Theme> & { id: ThemeId } {
+  if (!raw || typeof raw !== "object") return false;
+  const o = raw as Record<string, unknown>;
+  const cv = o.cssVars;
+  const px = o.pptx;
+  if (
+    typeof o.id !== "string" ||
+    !cv ||
+    typeof cv !== "object" ||
+    !px ||
+    typeof px !== "object"
+  ) {
+    return false;
+  }
+  const vars = cv as Record<string, unknown>;
+  const ppt = px as Record<string, unknown>;
+  return Boolean(
+    typeof vars.paper === "string" &&
+      typeof vars.ink === "string" &&
+      typeof vars.accent === "string" &&
+      typeof ppt.paper === "string" &&
+      typeof ppt.ink === "string" &&
+      typeof ppt.accent === "string"
+  );
+}
+
+/**
+ * After localStorage/share decode — snap preset ids to the canonical preset
+ * (so Brand picks up codebase palette tweaks) and gate "locked" to a minimal
+ * valid shape so partial JSON cannot poison state.
+ */
+export function coercePersistedTheme(raw: unknown): Theme {
+  if (!raw || typeof raw !== "object") return DEFAULT_THEME;
+  const partial = raw as Partial<Theme> & { id?: string };
+  if (partial.id === "editorial" || partial.id === "monochrome" || partial.id === "pitch") {
+    return THEMES[partial.id];
+  }
+  if (partial.id === "locked" && isThemeShape(raw)) {
+    return raw as Theme;
+  }
+  return DEFAULT_THEME;
+}
 
 export function getPresetTheme(id: string): Theme | null {
   if (id === "editorial" || id === "monochrome" || id === "pitch") {

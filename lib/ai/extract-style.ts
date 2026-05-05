@@ -31,8 +31,8 @@ Respond with valid JSON only. No markdown fences. No prose. Your response must s
 
 {
   "palette": {
-    "paper": "<hex color of the background / dominant negative space, e.g. #fffaf0>",
-    "ink": "<hex color of the main foreground / text / dark figure, e.g. #1f160f>",
+    "paper": "<hex color of the background / dominant negative space, e.g. #fffdfa>",
+    "ink": "<hex color of the main foreground / text / dark figure, e.g. #20190f>",
     "accent": "<hex color of the secondary highlight / smaller pop element. If the image is monochrome, repeat ink.>"
   },
   "mood": "<one or two words: 'editorial', 'pitch deck', 'monochrome', 'noir', 'pastel', 'tech', etc.>",
@@ -42,7 +42,7 @@ Respond with valid JSON only. No markdown fences. No prose. Your response must s
 GUIDANCE:
 - Hex must be 6-char "#rrggbb". Lowercase preferred.
 - imagePromptAppendix is the meat — be specific. Example tone:
-  "Editorial illustration aesthetic. Warm cream background (#fffaf0), deep ink foreground (#1f160f), terracotta accent (#b8553a). Generous negative space, single focal subject, no decorative clutter. Typography is clean modern sans-serif. Avoid gradients, shadows, 3D, stock-art clichés."
+  "Product UI like valon.ai: Base ink (#20190f), warm panels (#f8f6f3, #fffdfa), Valon Gold (#e19614) for micro accents only. Sans + serif pairing, whitespace-first, no kitsch."
 - Don't be poetic; be technical. The model reading this prompt later won't infer your intent — spell it out.`;
 
 export async function extractStyle(

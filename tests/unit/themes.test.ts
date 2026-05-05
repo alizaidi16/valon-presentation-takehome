@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildLockedTheme,
+  coercePersistedTheme,
   DEFAULT_THEME,
   PRESET_THEME_LIST,
   getPresetTheme,
@@ -51,6 +52,34 @@ describe("preset themes", () => {
     expect(PRESET_THEME_LIST.find((t) => t.id === "pitch")?.imagePromptAppendix).toMatch(
       /navy|electric|pitch/i
     );
+  });
+
+  it("editorial preset uses Valon gold as slide accent / PPTX highlight", () => {
+    const ed = PRESET_THEME_LIST.find((t) => t.id === "editorial");
+    expect(ed?.cssVars.accent.toLowerCase()).toBe("#e19614");
+    expect(ed?.pptx.accent).toBe("E19614");
+  });
+
+  it("coercePersistedTheme snaps presets to canonical objects", () => {
+    const tweaked = {
+      ...DEFAULT_THEME,
+      cssVars: { ...DEFAULT_THEME.cssVars, accent: "#ff0000" }
+    };
+    expect(coercePersistedTheme(tweaked)).toEqual(DEFAULT_THEME);
+    expect(coercePersistedTheme({ id: "monochrome", nonsense: true })).toEqual(
+      PRESET_THEME_LIST.find((t) => t.id === "monochrome")
+    );
+  });
+
+  it("coercePersistedTheme keeps valid locked themes and falls back cleanly", () => {
+    expect(coercePersistedTheme(null)).toEqual(DEFAULT_THEME);
+    expect(coercePersistedTheme({ id: "locked", foo: 1 })).toEqual(DEFAULT_THEME);
+    const locked = buildLockedTheme({
+      palette: { paper: "#fff", ink: "#000", accent: "#336699" },
+      imagePromptAppendix: "custom appendix text that is long enough for tests maybe"
+    });
+    locked.imagePromptAppendix = locked.imagePromptAppendix.padEnd(120, ".");
+    expect(coercePersistedTheme(locked)).toEqual(locked);
   });
 });
 

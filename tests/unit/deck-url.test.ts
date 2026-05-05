@@ -35,7 +35,7 @@ describe.skipIf(!hasCompression)("deck-url", () => {
 
     expect(payload.slides[0]?.prompt).toBe("Hero skyline");
     expect(payload.slides[0]?.feedback).toBe("done");
-    expect(payload.theme.imagePromptAppendix).toContain("Editorial");
+    expect(payload.theme.imagePromptAppendix).toMatch(/fintech|cream|Valon/i);
     expect("imageData" in payload.slides[0]).toBe(false);
     expect("critique" in payload.slides[0]).toBe(false);
     expect("extraStuff" in payload.slides[0]).toBe(false);

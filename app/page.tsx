@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   closestCenter,
   DndContext,
@@ -23,15 +24,15 @@ import type { Critique } from "@/lib/ai/critique";
 import type { StyleDNA } from "@/lib/ai/extract-style";
 import {
   buildLockedTheme,
+  coercePersistedTheme,
   DEFAULT_THEME,
   PRESET_THEME_LIST,
   getPresetTheme,
   type Theme,
   type ThemeId
 } from "@/lib/ai/themes";
-import { elapsedSeconds, workingHint } from "@/lib/ui/working-feedback";
+import { elapsedSeconds } from "@/lib/ui/working-feedback";
 import { slideThumbnailHeading } from "@/lib/ui/slide-thumbnail-heading";
-import { TEMPLATE_LIST, type Template } from "@/lib/templates";
 import { HistoryStack } from "@/lib/history/stack";
 import { normalizeFormat } from "@/lib/ai/helpers";
 import { decodeDeckHash, encodeDeckHash, toSharePayload } from "@/lib/share/deck-url";
@@ -48,6 +49,43 @@ const FORMAT_OPTIONS: Array<{ value: FormatOverride; label: string }> = [
   { value: "grid", label: "grid" },
   { value: "stats", label: "stats" }
 ];
+
+/**
+ * Recessed panels on layout slides (stats / grid tiles). Must be scoped with the
+ * deck theme — otherwise grid + stat cards keep :root --card-tint and look
+ * unchanged when switching themes (especially pitch vs light presets).
+ */
+function deriveSlideCardTint(css: Theme["cssVars"]): string {
+  const paper = css.paper.trim().toLowerCase();
+  const bg = css.bg.trim().toLowerCase();
+  if (paper === "#101a2c") {
+    return "#181f31";
+  }
+  if (paper === "#ffffff" || paper === "#fff") {
+    return bg;
+  }
+  return bg;
+}
+
+/** Deck palette only inside slide surfaces — app chrome keeps :root tokens. */
+function deckThemeScopedStyle(css: Theme["cssVars"]): CSSProperties {
+  const cardTint = deriveSlideCardTint(css);
+  return {
+    "--bg": css.bg,
+    "--paper": css.paper,
+    "--ink": css.ink,
+    "--ink-soft": css.inkSoft,
+    "--ink-muted": css.inkMuted,
+    "--rule": css.rule,
+    "--rule-strong": css.ruleStrong,
+    "--accent": css.accent,
+    "--accent-soft": css.accentSoft,
+    /** Layout slides use --gold/--card-tint — map from theme tokens so presets diverge visibly. */
+    "--gold": css.accent,
+    "--gold-soft": css.accentSoft,
+    "--card-tint": cardTint
+  } as CSSProperties;
+}
 
 type TitleLayout = { kind: "title"; headline: string; subtitle?: string };
 type BulletsLayout = { kind: "bullets"; headline: string; bullets: string[] };
@@ -119,7 +157,7 @@ function slideDisplayImage(slide: Slide | undefined): string | undefined {
   return slide.imageData;
 }
 
-/** True when the slide already has layout or image pixels (brief UI can hide). */
+/** True when the slide already has layout or image pixels — saved prompt stays in data but isn't shown separately. */
 function slideHasRenderedContent(slide: Slide | undefined): boolean {
   if (!slide) return false;
   if (slide.kind === "layout" && slide.layout) return true;
@@ -145,6 +183,11 @@ type DeckOutline = {
   deckTitle: string;
   slides: OutlineSlide[];
 };
+
+type BriefWizardStep = "compose" | "review";
+
+/** Editable outline row in the brief review step (checkbox + stable React key). */
+type BriefPlanRow = OutlineSlide & { rowId: string; included: boolean };
 
 const STORAGE_KEY = "valon-presentation-takehome-v6";
 
@@ -237,9 +280,12 @@ function slidesForLimitedStorage(slides: Slide[]): Slide[] {
   });
 }
 
-function makeSlide(index: number): Slide {
+/** Fixed so SSR and the client's first paint match (crypto UUIDs differ per process). */
+const STARTER_SLIDE_IDS = ["slide-starter-1", "slide-starter-2"] as const;
+
+function makeSlide(index: number, stableId?: string): Slide {
   return {
-    id: crypto.randomUUID(),
+    id: stableId ?? crypto.randomUUID(),
     name: `Slide ${index + 1}`,
     prompt: index === 0 ? DEFAULT_STARTER_SLIDE_PROMPT : "",
     status: "idle",
@@ -248,10 +294,10 @@ function makeSlide(index: number): Slide {
 }
 
 function starterSlides(): Slide[] {
-  return [makeSlide(0), makeSlide(1)];
+  return [makeSlide(0, STARTER_SLIDE_IDS[0]), makeSlide(1, STARTER_SLIDE_IDS[1])];
 }
 
-/** True only for the untouched two-slide starter scaffold ( IDs may differ ). */
+/** True only for the untouched two-slide starter scaffold (names/prompts/status, not ids). */
 function isPristineStarterDeck(slides: Slide[]): boolean {
   if (slides.length !== 2) return false;
   const [a, b] = slides;
@@ -333,6 +379,124 @@ function LayoutSlide({ layout }: { layout: SlideLayout }) {
   return null;
 }
 
+function AppLogoMark() {
+  const gid = useId().replace(/:/g, "");
+  return (
+    <svg
+      className="app-logo-svg"
+      width="34"
+      height="34"
+      viewBox="0 0 34 34"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
+    >
+      <defs>
+        <linearGradient id={`app-logo-grad-${gid}`} x1="6" y1="6" x2="16" y2="18" gradientUnits="userSpaceOnUse">
+          <stop stopColor="var(--gold)" />
+          <stop offset="1" stopColor="#d4bc6a" />
+        </linearGradient>
+      </defs>
+      <rect x="5" y="10" width="19" height="14" rx="3" fill="var(--surface-3)" stroke="var(--rule)" strokeWidth="1" />
+      <rect x="9" y="14" width="19" height="14" rx="3" fill="var(--paper)" stroke="var(--rule-strong)" strokeWidth="1" />
+      {/* Gold accent — reference Valon mark */}
+      <circle cx="13.5" cy="16.5" r="3.4" fill={`url(#app-logo-grad-${gid})`} />
+    </svg>
+  );
+}
+
+/**
+ * Non-sortable thumbnail — SSR + initial client paint only. Mirrors SortableThumb
+ * DOM so hydration matches; @dnd-kit's useUniqueId counter diverges server vs browser.
+ */
+function StaticSlideThumb({
+  slide,
+  index,
+  isActive,
+  onClick,
+  onDelete,
+  onInsertBelow,
+  deleteDisabled,
+  deleteTitle,
+  deckThemeCss
+}: {
+  slide: Slide;
+  index: number;
+  isActive: boolean;
+  onClick: () => void;
+  onDelete: () => void;
+  onInsertBelow: () => void;
+  deleteDisabled: boolean;
+  deleteTitle: string;
+  deckThemeCss: Theme["cssVars"];
+}) {
+  const isWorking = slide.status === "working";
+  const elapsed = elapsedSeconds(slide.startedAt, Date.now());
+  const thumbSrc = slideDisplayImage(slide);
+  const thumbHeading = slideThumbnailHeading(slide);
+
+  return (
+    <div className={`thumb-shell ${isActive ? "active" : ""}`}>
+      <button
+        type="button"
+        className="thumb-delete thumb-corner-action"
+        aria-label={`Delete slide: ${thumbHeading}`}
+        title={deleteTitle}
+        disabled={deleteDisabled}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!deleteDisabled) {
+            onDelete();
+          }
+        }}
+      >
+        ×
+      </button>
+      <button
+        type="button"
+        className="thumb-add-below thumb-corner-action"
+        aria-label={`Add slide below slide ${index + 1}: ${thumbHeading}`}
+        title="Add slide below this one"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onInsertBelow();
+        }}
+      >
+        +
+      </button>
+      <button
+        className={`thumb ${isWorking ? "is-working" : ""} status-${slide.status}`}
+        onClick={onClick}
+        type="button"
+      >
+        <div
+          className="thumb-art"
+          style={slide.layout ? deckThemeScopedStyle(deckThemeCss) : undefined}
+        >
+          {thumbSrc ?
+            <img alt={thumbHeading} src={thumbSrc} draggable={false} />
+          : slide.layout ?
+            <div className="thumb-layout-clone" aria-hidden>
+              <div className="thumb-layout-slot">
+                <LayoutSlide layout={slide.layout} />
+              </div>
+            </div>
+          : <span>empty-ish</span>}
+          {isWorking && <div className="thumb-shimmer" aria-hidden />}
+        </div>
+        <div className="thumb-copy">
+          <strong className="thumb-heading" title={thumbHeading}>
+            {thumbHeading}
+          </strong>
+          <span>{isWorking ? `${elapsed}s` : slide.status}</span>
+        </div>
+      </button>
+    </div>
+  );
+}
+
 /**
  * Draggable sidebar thumbnail. Pointer sensor uses an 8-px activation
  * distance so single clicks still pass through to onClick (the slide-select
@@ -345,16 +509,20 @@ function SortableThumb({
   isActive,
   onClick,
   onDelete,
+  onInsertBelow,
   deleteDisabled,
-  deleteTitle
+  deleteTitle,
+  deckThemeCss
 }: {
   slide: Slide;
   index: number;
   isActive: boolean;
   onClick: () => void;
   onDelete: () => void;
+  onInsertBelow: () => void;
   deleteDisabled: boolean;
   deleteTitle: string;
+  deckThemeCss: Theme["cssVars"];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: slide.id
@@ -377,7 +545,7 @@ function SortableThumb({
     >
       <button
         type="button"
-        className="thumb-delete"
+        className="thumb-delete thumb-corner-action"
         aria-label={`Delete slide: ${thumbHeading}`}
         title={deleteTitle}
         disabled={deleteDisabled}
@@ -392,13 +560,29 @@ function SortableThumb({
         ×
       </button>
       <button
+        type="button"
+        className="thumb-add-below thumb-corner-action"
+        aria-label={`Add slide below slide ${index + 1}: ${thumbHeading}`}
+        title="Add slide below this one"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onInsertBelow();
+        }}
+      >
+        +
+      </button>
+      <button
         className={`thumb ${isWorking ? "is-working" : ""} status-${slide.status}`}
         onClick={onClick}
         type="button"
         {...attributes}
         {...listeners}
       >
-        <div className="thumb-art">
+        <div
+          className="thumb-art"
+          style={slide.layout ? deckThemeScopedStyle(deckThemeCss) : undefined}
+        >
           {thumbSrc ?
             <img alt={thumbHeading} src={thumbSrc} draggable={false} />
           : slide.layout ?
@@ -432,15 +616,20 @@ export default function Home() {
   const [briefText, setBriefText] = useState("");
   const [briefSlideCount, setBriefSlideCount] = useState<number | "">(7);
   const [briefRunning, setBriefRunning] = useState(false);
+  const [briefWizardStep, setBriefWizardStep] = useState<BriefWizardStep>("compose");
+  /** Populated after the API returns an outline — user edits before creating slides. */
+  const [briefPlanTitle, setBriefPlanTitle] = useState("");
+  const [briefPlanRows, setBriefPlanRows] = useState<BriefPlanRow[] | null>(null);
   /**
-   * When true: deck starters + preset themes are tucked away. User reopens via
-   * the Theme summary control; brief stays on "Brief / templates".
+   * Sidebar panels tuck independently — brief/outline entry vs theme picker —
+   * so collapsing one doesn't hide the other.
    */
-  const [deckScaffoldMinimized, setDeckScaffoldMinimized] = useState(false);
+  const [briefSectionExpanded, setBriefSectionExpanded] = useState(true);
+  const [themeSectionExpanded, setThemeSectionExpanded] = useState(true);
 
   const [cookingAll, setCookingAll] = useState(false);
   const cookAbortRef = useRef<AbortController | null>(null);
-  /** AbortController for single-slide Cook / Again when not in Cook all pool. */
+  /** AbortController for single-slide Cook / Again (not shared with Retry-failed batch). */
   const soloCookAbortRef = useRef<AbortController | null>(null);
   /** AbortController shared by parallel fetches for "3 looks". */
   const variantsAbortRef = useRef<AbortController | null>(null);
@@ -468,6 +657,13 @@ export default function Home() {
    * localStorage so reloads preserve the look. */
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
   const [lockingStyle, setLockingStyle] = useState(false);
+  /** dnd-kit assigns unstable ids SSR vs browser — defer sortable rail until mounted. */
+  const [slideDndReady, setSlideDndReady] = useState(false);
+  /** Visible workspace title in the nav (editable). */
+  const [deckName, setDeckName] = useState("Studio");
+  const [deckNameEditing, setDeckNameEditing] = useState(false);
+  const [deckNameDraft, setDeckNameDraft] = useState("");
+  const deckNameInputRef = useRef<HTMLInputElement | null>(null);
   /** Bumps every 500ms while at least one slide is working. Forces a re-render
    * so the elapsed-time counters keep climbing. State value itself is unused
    * — only its identity matters to React. */
@@ -482,7 +678,7 @@ export default function Home() {
 
   /**
    * Undo/redo stack. Snapshots before structural mutations only:
-   * add/kill/reorder/template/brief/style-lock. Inline text edits (name,
+   * add/kill/reorder/brief/style-lock. Inline text edits (name,
    * notes, prompt) are excluded — those would explode the history with
    * per-keystroke entries, and the textarea's native Cmd+Z covers them.
    * `historyVersion` bumps after every history op so the Undo/Redo
@@ -491,7 +687,7 @@ export default function Home() {
   const historyRef = useRef(new HistoryStack<DeckSnapshot>(50));
   const [, bumpHistory] = useState(0);
 
-  /** Bumped when the deck is wiped (reset); blocks stale brief/template completions. */
+  /** Bumped when the deck is wiped (reset); blocks stale brief completions. */
   const deckEpochRef = useRef(0);
 
   const [voiceBriefListening, setVoiceBriefListening] = useState(false);
@@ -514,9 +710,28 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    setSlideDndReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (deckNameEditing) {
+      deckNameInputRef.current?.focus();
+      deckNameInputRef.current?.select();
+    }
+  }, [deckNameEditing]);
+
+  useEffect(() => {
+    const t = deckName.trim();
+    document.title = t ? `${t} — Deck studio` : "Deck studio";
+  }, [deckName]);
+
+  useEffect(() => {
     if (!briefOpen) {
       voiceBriefBaselineRef.current = "";
       stopVoiceBrief();
+      setBriefWizardStep("compose");
+      setBriefPlanRows(null);
+      setBriefPlanTitle("");
     }
   }, [briefOpen]);
 
@@ -559,8 +774,9 @@ export default function Home() {
               : (nextSlides[0]?.id ?? "");
             setSlides(nextSlides);
             setSelectedId(selId);
-            setTheme(decoded.theme as Theme);
-            setDeckScaffoldMinimized(true);
+            setTheme(coercePersistedTheme(decoded.theme));
+            setBriefSectionExpanded(false);
+            setThemeSectionExpanded(false);
             historyRef.current.reset();
             bumpHistory((n) => n + 1);
             window.history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -577,7 +793,8 @@ export default function Home() {
           const fresh = starterSlides();
           setSlides(fresh);
           setSelectedId(fresh[0]?.id ?? "");
-          setDeckScaffoldMinimized(false);
+          setBriefSectionExpanded(true);
+          setThemeSectionExpanded(true);
           return;
         }
 
@@ -587,35 +804,51 @@ export default function Home() {
             selectedId: string;
             theme?: Theme;
             deckScaffoldMinimized?: boolean;
+            briefSectionExpanded?: boolean;
+            themeSectionExpanded?: boolean;
+            deckName?: string;
           };
 
           if (parsed.slides?.length) {
             const normalized = normalizeSlidesAfterLoad(parsed.slides);
             setSlides(normalized);
             setSelectedId(parsed.selectedId || parsed.slides[0].id);
-            const stored =
+            if (typeof parsed.deckName === "string" && parsed.deckName.trim()) {
+              setDeckName(parsed.deckName.trim());
+            }
+            const minimizedLegacy =
               typeof parsed.deckScaffoldMinimized === "boolean" ?
                 parsed.deckScaffoldMinimized
-              : null;
-            setDeckScaffoldMinimized(
-              stored !== null ? stored : !isPristineStarterDeck(normalized)
+              : !isPristineStarterDeck(normalized);
+            const defaultExpanded = !minimizedLegacy;
+            setBriefSectionExpanded(
+              typeof parsed.briefSectionExpanded === "boolean" ?
+                parsed.briefSectionExpanded
+              : defaultExpanded
+            );
+            setThemeSectionExpanded(
+              typeof parsed.themeSectionExpanded === "boolean" ?
+                parsed.themeSectionExpanded
+              : defaultExpanded
             );
           }
           if (parsed.theme && parsed.theme.cssVars && parsed.theme.pptx) {
-            setTheme(parsed.theme);
+            setTheme(coercePersistedTheme(parsed.theme));
           }
         } catch {
           const fresh = starterSlides();
           setSlides(fresh);
           setSelectedId(fresh[0]?.id ?? "");
-          setDeckScaffoldMinimized(false);
+          setBriefSectionExpanded(true);
+          setThemeSectionExpanded(true);
         }
       } catch {
         if (!cancelled) {
           const fresh = starterSlides();
           setSlides(fresh);
           setSelectedId(fresh[0]?.id ?? "");
-          setDeckScaffoldMinimized(false);
+          setBriefSectionExpanded(true);
+          setThemeSectionExpanded(true);
         }
       } finally {
         if (!cancelled) {
@@ -642,14 +875,18 @@ export default function Home() {
         slides,
         selectedId: sel,
         theme,
-        deckScaffoldMinimized
+        briefSectionExpanded,
+        themeSectionExpanded,
+        deckName
       });
       const liteJson = JSON.stringify({
         slides: slidesForLimitedStorage(slides),
         selectedId: sel,
         theme,
         lite: true,
-        deckScaffoldMinimized
+        briefSectionExpanded,
+        themeSectionExpanded,
+        deckName
       });
 
       let pendingLiteReason: "lite-size" | "lite-quota" | null = null;
@@ -692,27 +929,7 @@ export default function Home() {
     }, STORAGE_DEBOUNCE_MS);
 
     return () => window.clearTimeout(savedTimer);
-  }, [slides, selectedId, theme, hydrationDone, deckScaffoldMinimized]);
-
-  /**
-   * Apply the active theme by writing its CSS custom properties onto
-   * <html>. Layout slides + UI surfaces read these vars from globals.css,
-   * so a single theme change re-skins everything visible.
-   */
-  useEffect(() => {
-    const root = document.documentElement;
-    const v = theme.cssVars;
-    root.style.setProperty("--bg", v.bg);
-    root.style.setProperty("--paper", v.paper);
-    root.style.setProperty("--ink", v.ink);
-    root.style.setProperty("--ink-soft", v.inkSoft);
-    root.style.setProperty("--ink-muted", v.inkMuted);
-    root.style.setProperty("--rule", v.rule);
-    root.style.setProperty("--rule-strong", v.ruleStrong);
-    root.style.setProperty("--accent", v.accent);
-    root.style.setProperty("--accent-soft", v.accentSoft);
-    root.dataset.theme = theme.id;
-  }, [theme]);
+  }, [slides, selectedId, theme, hydrationDone, briefSectionExpanded, themeSectionExpanded, deckName]);
 
   // Drive the elapsed-time counters while any slide is in flight.
   useEffect(() => {
@@ -765,12 +982,15 @@ export default function Home() {
     );
   }
 
-  function addSlide() {
+  function insertSlideBelow(afterIndex: number) {
     snapshotForUndo();
     const next = makeSlide(slides.length);
-    setSlides((current) => [...current, next]);
+    setSlides((current) => {
+      const copy = [...current];
+      copy.splice(afterIndex + 1, 0, next);
+      return copy;
+    });
     setSelectedId(next.id);
-    setMessage("Added another page.");
   }
 
   function killSlide(id: string) {
@@ -803,7 +1023,7 @@ export default function Home() {
   }
 
   /** Capture the current deck state on the undo stack. Call this BEFORE
-   * any structural mutation (add/kill/reorder/template/brief). */
+   * any structural mutation (add/kill/reorder/brief). */
   function snapshotForUndo() {
     historyRef.current.snapshot({ slides, selectedId });
     bumpHistory((n) => n + 1);
@@ -828,8 +1048,8 @@ export default function Home() {
   }
 
   /**
-   * Cook one slide. Patches the slide's status as it progresses. Used by both
-   * the single-slide "Cook" button and the batch "Cook all" flow.
+   * Cook one slide. Patches the slide's status as it progresses. Used by the
+   * single-slide Cook controls and the sidebar "Retry failed" batch.
    */
   async function cookOneSlide(
     slide: Slide,
@@ -850,7 +1070,7 @@ export default function Home() {
       if (!hasLayout && !hasImage && !slide.prompt.trim()) {
         patchSlide(slide.id, {
           status: "error",
-          feedback: "Cook this slide or add a brief before asking for AI edits."
+          feedback: "Cook this slide first, or add instructions before asking for AI edits."
         });
         return { ok: false, reason: "Nothing to edit yet." };
       }
@@ -994,7 +1214,7 @@ export default function Home() {
     const hasRendered = slideHasRenderedContent(selectedSlide);
 
     if (!hasRendered && !selectedSlide.prompt.trim()) {
-      setMessage("Add a slide brief first.");
+      setMessage("Add instructions for the AI first.");
       return;
     }
 
@@ -1295,7 +1515,7 @@ export default function Home() {
 
   /**
    * Wipe deck + browser cache for this origin key, reopen defaults, strip #share hashes.
-   * Aborts Cook all and shuts overlays so stale async work cannot patch the cleared deck.
+   * Aborts the in-flight batch (Retry failed / multi-slide cook) and shuts overlays so stale async work cannot patch the cleared deck.
    */
   function resetFrontend() {
     if (
@@ -1341,7 +1561,8 @@ export default function Home() {
     setBriefOpen(false);
     setBriefText("");
     setBriefSlideCount(7);
-    setDeckScaffoldMinimized(false);
+    setBriefSectionExpanded(true);
+    setThemeSectionExpanded(true);
     setPresenterOpen(false);
     setPresenterShowNotes(false);
     setPresenterIndex(0);
@@ -1349,6 +1570,9 @@ export default function Home() {
     setExporting(false);
     setCookingAll(false);
     setLockingStyle(false);
+    setDeckName("Studio");
+    setDeckNameEditing(false);
+    setDeckNameDraft("");
 
     setMessage("Starter deck restored — local snapshot cleared.");
   }
@@ -1413,8 +1637,8 @@ export default function Home() {
   /**
    * Extract a style DNA from the selected slide's image and use it as the
    * deck-wide theme. All future image generations will use the extracted
-   * imagePromptAppendix and the layout slides re-skin to the extracted
-   * palette via the theme effect above.
+   * imagePromptAppendix and layout slides re-skin to the extracted palette on
+   * slide surfaces only (scoped tokens — app chrome stays on Valon defaults).
    */
   async function lockStyleFromSelectedSlide() {
     const src = selectedSlide ? slideDisplayImage(selectedSlide) : undefined;
@@ -1549,7 +1773,7 @@ export default function Home() {
     }
   }
 
-  async function generateFromBrief() {
+  async function draftOutlineFromBrief() {
     if (!briefText.trim()) {
       setMessage("Need a brief to work from.");
       return;
@@ -1557,7 +1781,7 @@ export default function Home() {
 
     const epoch = deckEpochRef.current;
     setBriefRunning(true);
-    setMessage("Drafting a deck outline...");
+    setMessage("Drafting slide-by-slide outline...");
 
     try {
       const response = await fetch("/api/deck-from-brief", {
@@ -1571,34 +1795,29 @@ export default function Home() {
 
       const payload = (await response.json()) as Partial<DeckOutline> & { error?: string };
 
-      if (!response.ok || payload.error || !payload.slides || !payload.deckTitle) {
+      if (!response.ok || payload.error || !payload.slides?.length || !payload.deckTitle) {
         setMessage(payload.error ?? "Outline failed.");
         return;
       }
-
-      const generatedSlides: Slide[] = payload.slides.map((s) => ({
-        id: crypto.randomUUID(),
-        name: s.name,
-        prompt: s.prompt,
-        note: s.notes,
-        suggestedFormat: s.suggestedFormat,
-        status: "idle"
-      }));
 
       if (deckEpochRef.current !== epoch) {
         setMessage("Outline arrived after a reset — ignored.");
         return;
       }
 
-      snapshotForUndo();
-      setSlides(generatedSlides);
-      setSelectedId(generatedSlides[0]?.id ?? "");
-      setBriefOpen(false);
-      setBriefText("");
-      setDeckScaffoldMinimized(true);
-      setMessage(
-        `Generated ${generatedSlides.length}-slide outline: "${payload.deckTitle}". Click Cook on each slide to fill it in.`
-      );
+      const rows: BriefPlanRow[] = payload.slides.map((s) => ({
+        rowId: crypto.randomUUID(),
+        included: true,
+        name: typeof s.name === "string" ? s.name : "",
+        prompt: typeof s.prompt === "string" ? s.prompt : "",
+        notes: typeof (s as { notes?: unknown }).notes === "string" ? (s as { notes: string }).notes : "",
+        suggestedFormat: normalizeFormat((s as { suggestedFormat?: unknown }).suggestedFormat)
+      }));
+
+      setBriefPlanTitle(payload.deckTitle.trim());
+      setBriefPlanRows(rows);
+      setBriefWizardStep("review");
+      setMessage("");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Outline failed.");
     } finally {
@@ -1606,20 +1825,32 @@ export default function Home() {
     }
   }
 
-  /**
-   * Drop a template's slides into the deck. Replaces the current deck (same
-   * destructive behavior as deck-from-brief). Templates are deterministic
-   * scaffolds — content still needs the user to click Cook all to fill in.
-   */
-  function applyTemplate(template: Template) {
+  function setBriefPlanAllIncluded(include: boolean) {
+    setBriefPlanRows((prev) => prev?.map((row) => ({ ...row, included: include })) ?? null);
+  }
+
+  function updateBriefPlanRow(rowId: string, patch: Partial<Omit<BriefPlanRow, "rowId">>) {
+    setBriefPlanRows((prev) =>
+      prev?.map((row) => (row.rowId === rowId ? { ...row, ...patch } : row)) ?? null
+    );
+  }
+
+  function confirmBriefPlanToDeck() {
+    const rows = briefPlanRows ?? [];
+    const picked = rows.filter((row) => row.included);
+    if (picked.length === 0) {
+      setMessage("Check at least one slide to create, or cancel.");
+      return;
+    }
+
     const epoch = deckEpochRef.current;
 
-    const generatedSlides: Slide[] = template.slides.map((s) => ({
+    const generatedSlides: Slide[] = picked.map((row) => ({
       id: crypto.randomUUID(),
-      name: s.name,
-      prompt: s.prompt,
-      note: s.notes,
-      suggestedFormat: s.suggestedFormat,
+      name: row.name.trim() || "Untitled slide",
+      prompt: row.prompt,
+      note: row.notes ?? "",
+      suggestedFormat: row.suggestedFormat,
       status: "idle"
     }));
 
@@ -1627,161 +1858,234 @@ export default function Home() {
       return;
     }
 
+    const titleForMsg = briefPlanTitle.trim() || "outline";
+
     snapshotForUndo();
     setSlides(generatedSlides);
     setSelectedId(generatedSlides[0]?.id ?? "");
+    setBriefSectionExpanded(false);
+    setThemeSectionExpanded(false);
     setBriefOpen(false);
     setBriefText("");
-    setDeckScaffoldMinimized(true);
     setMessage(
-      `Loaded "${template.name}" template (${generatedSlides.length} slides). Click "Cook all" to generate content.`
+      `Created ${generatedSlides.length} slide(s) from deck "${titleForMsg}". Cook slides one by one in Studio — or use Update slide after editing instructions.`
     );
   }
 
   return (
     <main className="shell">
-      <aside className="sidebar">
-        <div className="sidebar-top">
-          <p className="eyebrow">Valon Take-home</p>
-          <h1>Slides</h1>
+      <header className="app-nav" role="banner">
+        <div className="app-nav-inner">
+          <div className="app-nav-leading">
+            <span className="app-logo-wrap" title="Deck studio">
+              <AppLogoMark />
+            </span>
+            {deckNameEditing ?
+              <input
+                ref={deckNameInputRef}
+                className="app-nav-deck-input"
+                aria-label="Workspace name"
+                value={deckNameDraft}
+                onChange={(e) => setDeckNameDraft(e.target.value)}
+                onBlur={() => {
+                  const next = deckNameDraft.trim();
+                  setDeckName(next.length ? next : "Studio");
+                  setDeckNameEditing(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    deckNameInputRef.current?.blur();
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setDeckNameEditing(false);
+                  }
+                }}
+                maxLength={80}
+              />
+            : <button
+                type="button"
+                className="app-nav-deck-button"
+                aria-label={`Workspace: ${deckName}. Click to rename.`}
+                onClick={() => {
+                  setDeckNameDraft(deckName);
+                  setDeckNameEditing(true);
+                }}
+              >
+                {deckName}
+              </button>
+            }
+          </div>
+          <nav className="top-actions app-nav-actions" aria-label="Deck actions">
+            <button
+              type="button"
+              className="ghost-button app-nav-reset-btn"
+              onClick={() => resetFrontend()}
+              disabled={cookingAll || briefRunning || lockingStyle || exporting}
+              title="Reset to starter deck — clears local snapshot, undo/redo stack, overlays, URL hash."
+              aria-label="Reset app to starter deck"
+            >
+              <span className="app-nav-reset-icon" aria-hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                </svg>
+              </span>
+            </button>
+            <button
+              className="ghost-button icon-button"
+              onClick={doUndo}
+              disabled={!historyRef.current.canUndo()}
+              type="button"
+              title="Undo (⌘Z)"
+              aria-label="Undo"
+            >
+              ↶
+            </button>
+            <button
+              className="ghost-button icon-button"
+              onClick={doRedo}
+              disabled={!historyRef.current.canRedo()}
+              type="button"
+              title="Redo (⌘⇧Z)"
+              aria-label="Redo"
+            >
+              ↷
+            </button>
+            <span className="app-toolbar-divider" aria-hidden />
+            <button
+              className="loud-button"
+              onClick={openPresenter}
+              disabled={!slides.length}
+              type="button"
+              title="Present (Esc to exit, arrows to navigate, N for notes)"
+            >
+              Present ▶
+            </button>
+            <button
+              className="ghost-button"
+              onClick={() => {
+                void copyShareLink();
+              }}
+              type="button"
+              title="Compressed link with outlines and theme — image bytes stay local"
+            >
+              Share link
+            </button>
+            <button
+              className="ghost-button"
+              disabled={exporting}
+              onClick={exportDeck}
+              type="button"
+            >
+              {exporting ? "packing..." : "PPT-ish"}
+            </button>
+          </nav>
+        </div>
+      </header>
 
-          {deckScaffoldMinimized ?
-            <div className="sidebar-deck-sources sidebar-deck-sources--collapsed">
+      <div className="shell-columns">
+      <aside className="sidebar">
+        {briefSectionExpanded ?
+          <section
+            className="sidebar-deck-sources sidebar-deck-sources--expanded"
+            aria-label="Create a deck using brief"
+          >
+            <div className="sidebar-panel-head">
+              <p className="sidebar-deck-sources-heading sidebar-brief-heading-plain">
+                Create a deck using brief
+              </p>
+              <button
+                type="button"
+                className="sidebar-panel-icon-btn"
+                aria-label="Collapse brief section"
+                onClick={() => setBriefSectionExpanded(false)}
+              >
+                <span aria-hidden>▴</span>
+              </button>
+            </div>
+            <p className="sidebar-deck-sources-sub">
+              Draft a slide-by-slide outline from a written brief, then create the deck when you are ready.
+            </p>
+            <button
+              className="loud-button sidebar-deck-sources-brief"
+              type="button"
+              disabled={cookingAll || briefRunning}
+              onClick={() => setBriefOpen(true)}
+            >
+              From brief ✨
+            </button>
+          </section>
+        : <div className="sidebar-brief-collapsed" aria-label="Brief (collapsed)">
+            <div className="sidebar-panel-collapsed-row">
               <button
                 type="button"
                 className="loud-button sidebar-deck-sources-wizard"
                 disabled={cookingAll || briefRunning}
                 onClick={() => setBriefOpen(true)}
               >
-                Brief / templates
+                From brief
               </button>
               <button
                 type="button"
-                className="sidebar-theme-snippet sidebar-theme-snippet--with-brief"
-                onClick={() => setDeckScaffoldMinimized(false)}
-                title="Show templates and theme presets"
+                className="sidebar-panel-icon-btn"
+                aria-label="Expand brief section"
+                onClick={() => setBriefSectionExpanded(true)}
               >
-                <p className="sidebar-theme-snippet-label">Theme & templates</p>
-                <div className="sidebar-theme-snippet-row">
-                  <span className="theme-swatch" aria-hidden>
-                    <span style={{ background: theme.cssVars.paper }} />
-                    <span style={{ background: theme.cssVars.ink }} />
-                    <span style={{ background: theme.cssVars.accent }} />
-                  </span>
-                  <span className="sidebar-theme-snippet-name">{theme.name}</span>
-                  <span className="sidebar-theme-snippet-chevron" aria-hidden>
-                    ▸
-                  </span>
-                </div>
+                <span aria-hidden>▾</span>
               </button>
             </div>
-          : <section
-              className="sidebar-deck-sources sidebar-deck-sources--expanded"
-              aria-label="Deck starters and themes"
-            >
-              <p className="sidebar-deck-sources-heading">Deck starters</p>
-              <p className="sidebar-deck-sources-sub">
-                Outline from a written brief or drop in a reusable slide arc.
-              </p>
-              <button
-                className="loud-button sidebar-deck-sources-brief"
-                type="button"
-                disabled={cookingAll || briefRunning}
-                onClick={() => setBriefOpen(true)}
-              >
-                From brief ✨
-              </button>
-              <p className="sidebar-deck-templates-heading">Templates</p>
-              <div className="sidebar-template-quick" role="group" aria-label="Starter templates">
-                {TEMPLATE_LIST.map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className="sidebar-template-chip"
-                    disabled={cookingAll || briefRunning || lockingStyle}
-                    onClick={() => applyTemplate(t)}
-                    title={t.blurb}
-                  >
-                    <span className="sidebar-template-chip-name">{t.name}</span>
-                    <span className="sidebar-template-chip-scope">{t.scope}</span>
-                  </button>
-                ))}
-              </div>
+          </div>
+        }
+
+        {themeSectionExpanded ?
+          <div className="theme-card">
+            <div className="sidebar-panel-head theme-card-panel-head">
+              <p className="eyebrow">Theme</p>
               <button
                 type="button"
-                className="ghost-button sidebar-deck-sources-tuck"
-                onClick={() => setDeckScaffoldMinimized(true)}
+                className="sidebar-panel-icon-btn"
+                aria-label="Collapse theme section"
+                onClick={() => setThemeSectionExpanded(false)}
               >
-                Minimize theme & starters
+                <span aria-hidden>▴</span>
               </button>
-            </section>
-          }
-
-          {(() => {
-            const idleCount = slides.filter(
-              (s) => s.status !== "done" && s.status !== "working"
-            ).length;
-            const errorCount = slides.filter((s) => s.status === "error").length;
-            const workingCount = slides.filter((s) => s.status === "working").length;
-
-            if (cookingAll) {
-              return (
+            </div>
+            <div className="theme-chips" role="group" aria-label="Theme picker">
+              {PRESET_THEME_LIST.map((t) => (
                 <button
-                  className="ghost-button stop-button"
-                  onClick={cancelCookAll}
+                  key={t.id}
                   type="button"
+                  className={`theme-chip ${theme.id === t.id ? "active" : ""}`}
+                  onClick={() => setTheme(t)}
+                  title={t.blurb}
                 >
-                  Stop ({workingCount} running)
+                  <span className="theme-swatch" aria-hidden>
+                    <span style={{ background: t.cssVars.paper }} />
+                    <span style={{ background: t.cssVars.ink }} />
+                    <span style={{ background: t.cssVars.accent }} />
+                  </span>
+                  <span>{t.name}</span>
                 </button>
-              );
-            }
-
-            return (
-              <>
-                <button
-                  className="ghost-button"
-                  onClick={() => {
-                    void cookAllSlides();
-                  }}
-                  type="button"
-                  disabled={idleCount === 0}
-                >
-                  Cook all{idleCount ? ` (${idleCount})` : ""}
-                </button>
-                {errorCount > 0 && (
-                  <button
-                    className="ghost-button retry-button"
-                    onClick={() => {
-                      void cookAllSlides({ onlyFailed: true });
-                    }}
-                    type="button"
-                  >
-                    Retry failed ({errorCount})
-                  </button>
-                )}
-              </>
-            );
-          })()}
-
-          <button className="ghost-button" onClick={addSlide} type="button">
-            Box +
-          </button>
-        </div>
-
-        {deckScaffoldMinimized ?
-          <div className="sidebar-setup-minimized-tail">
+              ))}
+            </div>
             {theme.id === "locked" && (
-              <div className="theme-locked-row theme-locked-row-compact">
+              <div className="theme-locked-row">
                 <span className="theme-locked-label" title={theme.blurb}>
                   ⚲ {theme.name}
                 </span>
-                <button className="theme-unlock" type="button" onClick={() => setTheme(DEFAULT_THEME)}>
+                <button
+                  className="theme-unlock"
+                  type="button"
+                  onClick={() => setTheme(DEFAULT_THEME)}
+                >
                   unlock
                 </button>
               </div>
             )}
             <button
-              className="ghost-button theme-lock-button sidebar-setup-minimized-btn"
+              className="ghost-button theme-lock-button"
               type="button"
               disabled={!slideDisplayImage(selectedSlide) || lockingStyle}
               onClick={() => {
@@ -1793,170 +2097,105 @@ export default function Home() {
                   : "Cook an image slide first, then lock its style"
               }
             >
-              {lockingStyle ? "reading..." : "Lock style from slide"}
+              {lockingStyle ? "reading..." : "Lock style from this slide"}
             </button>
-            <div className="sidebar-reset-footer">
+          </div>
+        : <div className="sidebar-theme-collapsed" aria-label="Theme (collapsed)">
+            <div className="sidebar-panel-collapsed-row">
+              <div className="sidebar-theme-collapsed-preview">
+                <span className="theme-swatch" aria-hidden>
+                  <span style={{ background: theme.cssVars.paper }} />
+                  <span style={{ background: theme.cssVars.ink }} />
+                  <span style={{ background: theme.cssVars.accent }} />
+                </span>
+                <span className="sidebar-theme-collapsed-name">{theme.name}</span>
+              </div>
               <button
                 type="button"
-                className="ghost-button sidebar-reset-trigger"
-                onClick={() => resetFrontend()}
-                disabled={cookingAll || briefRunning || lockingStyle || exporting}
-                title="Clear local snapshot, undo/redo stack, overlays, URL hash — back to two starter slides."
+                className="sidebar-panel-icon-btn"
+                aria-label="Expand theme section"
+                onClick={() => setThemeSectionExpanded(true)}
               >
-                Reset app…
+                <span aria-hidden>▾</span>
               </button>
             </div>
           </div>
-        : <div className="theme-card">
-          <p className="eyebrow">Theme</p>
-          <div className="theme-chips" role="group" aria-label="Theme picker">
-            {PRESET_THEME_LIST.map((t) => (
+        }
+
+        {(cookingAll || slides.some((s) => s.status === "error")) && (
+          <div className="sidebar-actions">
+            {cookingAll ?
               <button
-                key={t.id}
+                className="ghost-button stop-button"
+                onClick={cancelCookAll}
                 type="button"
-                className={`theme-chip ${theme.id === t.id ? "active" : ""}`}
-                onClick={() => setTheme(t)}
-                title={t.blurb}
               >
-                <span className="theme-swatch" aria-hidden>
-                  <span style={{ background: t.cssVars.paper }} />
-                  <span style={{ background: t.cssVars.ink }} />
-                  <span style={{ background: t.cssVars.accent }} />
-                </span>
-                <span>{t.name}</span>
+                Stop ({slides.filter((s) => s.status === "working").length} running)
               </button>
+            : <button
+                type="button"
+                className="ghost-button retry-button"
+                onClick={() => {
+                  void cookAllSlides({ onlyFailed: true });
+                }}
+              >
+                Retry failed ({slides.filter((s) => s.status === "error").length})
+              </button>
+            }
+          </div>
+        )}
+
+        {slideDndReady ?
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragEnd={handleDragEnd}
+          >
+            <SortableContext
+              items={slides.map((s) => s.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              <div className="slide-list">
+                {slides.map((slide, index) => (
+                  <SortableThumb
+                    key={slide.id}
+                    slide={slide}
+                    index={index}
+                    isActive={slide.id === selectedSlide?.id}
+                    onClick={() => setSelectedId(slide.id)}
+                    onDelete={() => killSlide(slide.id)}
+                    onInsertBelow={() => insertSlideBelow(index)}
+                    deleteDisabled={slides.length <= 1}
+                    deleteTitle={slides.length <= 1 ? "One slide is required" : "Delete this slide"}
+                    deckThemeCss={theme.cssVars}
+                  />
+                ))}
+              </div>
+            </SortableContext>
+          </DndContext>
+        : <div className="slide-list">
+            {slides.map((slide, index) => (
+              <StaticSlideThumb
+                key={slide.id}
+                slide={slide}
+                index={index}
+                isActive={slide.id === selectedSlide?.id}
+                onClick={() => setSelectedId(slide.id)}
+                onDelete={() => killSlide(slide.id)}
+                onInsertBelow={() => insertSlideBelow(index)}
+                deleteDisabled={slides.length <= 1}
+                deleteTitle={slides.length <= 1 ? "One slide is required" : "Delete this slide"}
+                deckThemeCss={theme.cssVars}
+              />
             ))}
           </div>
-          {theme.id === "locked" && (
-            <div className="theme-locked-row">
-              <span className="theme-locked-label" title={theme.blurb}>
-                ⚲ {theme.name}
-              </span>
-              <button
-                className="theme-unlock"
-                type="button"
-                onClick={() => setTheme(DEFAULT_THEME)}
-              >
-                unlock
-              </button>
-            </div>
-          )}
-          <button
-            className="ghost-button theme-lock-button"
-            type="button"
-            disabled={!slideDisplayImage(selectedSlide) || lockingStyle}
-            onClick={() => {
-              void lockStyleFromSelectedSlide();
-            }}
-            title={
-              selectedSlide && slideDisplayImage(selectedSlide)
-                ? "Use this slide's palette + style for the rest of the deck"
-                : "Cook an image slide first, then lock its style"
-            }
-          >
-            {lockingStyle ? "reading..." : "Lock style from this slide"}
-          </button>
-          <div className="sidebar-reset-footer">
-            <button
-              type="button"
-              className="ghost-button sidebar-reset-trigger"
-              onClick={() => resetFrontend()}
-              disabled={cookingAll || briefRunning || lockingStyle || exporting}
-              title="Clear local snapshot, undo/redo stack, overlays, URL hash — back to two starter slides."
-            >
-              Reset app…
-            </button>
-          </div>
-        </div>}
-
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragEnd={handleDragEnd}
-        >
-          <SortableContext
-            items={slides.map((s) => s.id)}
-            strategy={verticalListSortingStrategy}
-          >
-            <div className="slide-list">
-              {slides.map((slide, index) => (
-                <SortableThumb
-                  key={slide.id}
-                  slide={slide}
-                  index={index}
-                  isActive={slide.id === selectedSlide?.id}
-                  onClick={() => setSelectedId(slide.id)}
-                  onDelete={() => killSlide(slide.id)}
-                  deleteDisabled={slides.length <= 1}
-                  deleteTitle={slides.length <= 1 ? "One slide is required" : "Delete this slide"}
-                />
-              ))}
-            </div>
-          </SortableContext>
-        </DndContext>
+        }
       </aside>
 
       <section className="editor">
-        <header className="editor-topbar">
-          <div className="editor-topbar-inner">
-            <p className="editor-topbar-title">Studio</p>
-            <nav className="top-actions editor-top-actions" aria-label="Deck actions">
-              <button
-                className="ghost-button icon-button"
-                onClick={doUndo}
-                disabled={!historyRef.current.canUndo()}
-                type="button"
-                title="Undo (⌘Z)"
-                aria-label="Undo"
-              >
-                ↶
-              </button>
-              <button
-                className="ghost-button icon-button"
-                onClick={doRedo}
-                disabled={!historyRef.current.canRedo()}
-                type="button"
-                title="Redo (⌘⇧Z)"
-                aria-label="Redo"
-              >
-                ↷
-              </button>
-              <span className="editor-toolbar-divider" aria-hidden />
-              <button
-                className="loud-button"
-                onClick={openPresenter}
-                disabled={!slides.length}
-                type="button"
-                title="Present (Esc to exit, arrows to navigate, N for notes)"
-              >
-                Present ▶
-              </button>
-              <button
-                className="ghost-button"
-                onClick={() => {
-                  void copyShareLink();
-                }}
-                type="button"
-                title="Compressed link with outlines and theme — image bytes stay local"
-              >
-                Share link
-              </button>
-              <button
-                className="ghost-button"
-                disabled={exporting}
-                onClick={exportDeck}
-                type="button"
-              >
-                {exporting ? "packing..." : "PPT-ish"}
-              </button>
-            </nav>
-          </div>
-        </header>
-
         <div className="editor-rail">
         {(() => {
           const isWorking = selectedSlide?.status === "working";
-          const elapsed = elapsedSeconds(selectedSlide?.startedAt, Date.now());
           const displayImg = slideDisplayImage(selectedSlide);
           const hasRendered = slideHasRenderedContent(selectedSlide);
           const primaryDisabled =
@@ -1970,7 +2209,10 @@ export default function Home() {
               <div className={`editor-canvas-column ${isWorking ? "is-working" : ""}`}>
                 <div className={`canvas-wrap ${isWorking ? "is-working" : ""}`}>
                   <div className="canvas-card-wrap">
-                    <div className={`canvas-card ${isWorking ? "is-working" : ""}`}>
+                    <div
+                      className={`canvas-card ${isWorking ? "is-working" : ""}`}
+                      style={deckThemeScopedStyle(theme.cssVars)}
+                    >
                       {selectedSlide?.kind === "layout" && selectedSlide.layout ?
                         <LayoutSlide layout={selectedSlide.layout} />
                       : displayImg ?
@@ -1981,7 +2223,7 @@ export default function Home() {
                         />
                       : <div className="empty-state">
                           <p>No slide yet.</p>
-                          <span>Use the panel on the right — add a brief and generate.</span>
+                          <span>Use Instructions for AI on the right — then generate.</span>
                         </div>
                       }
                       {isWorking && (
@@ -1989,27 +2231,6 @@ export default function Home() {
                           <div className="canvas-shimmer" />
                         </div>
                       )}
-                    </div>
-
-                    <div className="feedback-bar" aria-live="polite">
-                      <span className="feedback-bar-status">
-                        {selectedSlide?.status ?? "idle"}
-                        {isWorking && (
-                          <span className="feedback-bar-elapsed"> · {elapsed}s</span>
-                        )}
-                      </span>
-                      <span className="feedback-bar-msg">
-                        {isWorking ?
-                          workingHint({
-                            suggestedFormat: selectedSlide?.suggestedFormat,
-                            elapsed
-                          })
-                        : selectedSlide?.feedback?.trim() ?
-                          selectedSlide.feedback
-                        : selectedSlide?.status === "done" ?
-                          ""
-                        : "Ready when you are."}
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -2069,31 +2290,46 @@ export default function Home() {
               </div>
 
               {selectedSlide && (
-                <aside className="slide-ai-sidebar" aria-label="Slide brief, format, and AI">
-                  <p className="eyebrow">Slide & AI</p>
+                <aside
+                  className="slide-ai-sidebar"
+                  aria-label="Instructions for AI, format, and actions"
+                >
+                  <p className="eyebrow" id={`slide-ai-title-${selectedSlide.id}`}>
+                    Instructions for AI
+                  </p>
                   <p className="slide-ai-hint">
                     {!hasRendered ?
                       "Describe what this slide should communicate, pick format, then generate."
-                    : "Refine with instructions, refresh without changing the brief below the hood, or use 3 looks on image slides."}
+                    : "Add changes below for the next version, or leave it empty to regenerate from your original instructions (not shown here)."}
                   </p>
 
-                  {!hasRendered && (
-                    <div className="slide-ai-brief-block">
-                      <label className="field-label field-label-soft" htmlFor={`slide-brief-${selectedSlide.id}`}>
-                        Slide brief
-                      </label>
-                      <textarea
-                        id={`slide-brief-${selectedSlide.id}`}
-                        onChange={(event) =>
-                          patchSlide(selectedSlide.id, { prompt: event.target.value })
-                        }
-                        placeholder="What this slide must convey — layout vs image follows your format chips (or auto)."
-                        rows={5}
-                        disabled={isWorking || cookingAll || lockingStyle || briefRunning}
-                        value={selectedSlide.prompt ?? ""}
-                      />
-                    </div>
-                  )}
+                  {!hasRendered ?
+                    <textarea
+                      id={`slide-ai-${selectedSlide.id}`}
+                      className="slide-ai-instructions"
+                      aria-labelledby={`slide-ai-title-${selectedSlide.id}`}
+                      onChange={(event) =>
+                        patchSlide(selectedSlide.id, { prompt: event.target.value })
+                      }
+                      placeholder='Message, visuals, tone, hierarchy—anything the model should follow for this slide.'
+                      rows={6}
+                      disabled={isWorking || cookingAll || lockingStyle || briefRunning}
+                      value={selectedSlide.prompt ?? ""}
+                    />
+                  : <textarea
+                      id={`slide-ai-${selectedSlide.id}`}
+                      key={selectedSlide.id}
+                      className="slide-ai-instructions"
+                      aria-labelledby={`slide-ai-title-${selectedSlide.id}`}
+                      defaultValue={slideEditDraftRef.current[selectedSlide.id] ?? ""}
+                      onChange={(e) => {
+                        slideEditDraftRef.current[selectedSlide.id] = e.target.value;
+                      }}
+                      placeholder='e.g. "Change bullet 4 to …" — leave blank to rerun from your original slide instructions'
+                      rows={7}
+                      disabled={isWorking || cookingAll || lockingStyle || briefRunning}
+                    />
+                  }
 
                   <label className="field-label field-label-soft" htmlFor={`format-${selectedSlide.id}`}>
                     Format override
@@ -2116,26 +2352,6 @@ export default function Home() {
                       );
                     })}
                   </div>
-
-                  <label className="field-label field-label-soft" htmlFor={`slide-ai-${selectedSlide.id}`}>
-                    AI instructions {!hasRendered && "(optional)"}
-                  </label>
-                  <textarea
-                    id={`slide-ai-${selectedSlide.id}`}
-                    key={selectedSlide.id}
-                    className="slide-ai-instructions"
-                    defaultValue={slideEditDraftRef.current[selectedSlide.id] ?? ""}
-                    onChange={(e) => {
-                      slideEditDraftRef.current[selectedSlide.id] = e.target.value;
-                    }}
-                    placeholder={
-                      hasRendered ?
-                        `e.g. "Change bullet 4 to …" — or leave blank to refresh from the saved brief`
-                      : `Optional: steer the first version (e.g. "lead with the stat")`
-                    }
-                    rows={hasRendered ? 7 : 4}
-                    disabled={isWorking || cookingAll || lockingStyle || briefRunning}
-                  />
 
                   <div className="slide-ai-actions-row">
                     {isWorking && !cookingAll ?
@@ -2208,15 +2424,8 @@ export default function Home() {
         })()}
 
         </div>
-
-        {message.trim() ?
-          <footer className="editor-foot">
-            <div className="editor-foot-inner">
-              <div className="status-bar">{message}</div>
-            </div>
-          </footer>
-        : null}
       </section>
+      </div>
 
       {presenterOpen && slides[presenterIndex] && (() => {
         const slide = slides[presenterIndex];
@@ -2230,7 +2439,7 @@ export default function Home() {
               setPresenterIndex((i) => Math.min(slides.length - 1, i + 1));
             }
           }}>
-            <div className="presenter-stage">
+            <div className="presenter-stage" style={deckThemeScopedStyle(theme.cssVars)}>
               {slide.kind === "layout" && slide.layout ? (
                 <LayoutSlide layout={slide.layout} />
               ) : presenterImg ? (
@@ -2238,7 +2447,7 @@ export default function Home() {
               ) : (
                 <div className="presenter-empty">
                   <p>{slide.name}</p>
-                  <span>Use the panel on the right to generate this slide.</span>
+                  <span>Use Instructions for AI in Studio to generate this slide.</span>
                 </div>
               )}
             </div>
@@ -2306,103 +2515,213 @@ export default function Home() {
             }
           }}
         >
-          <div className="brief-panel">
-            <p className="eyebrow">Generate from a brief</p>
-            <h2 className="brief-title">Spell out the deck.</h2>
-            <p className="brief-help">
-              Audience, purpose, tone, key points. The AI will draft an outline — title, slide names,
-              prompts, and speaker notes — picking image vs layout for each slide.
-            </p>
+          <div
+            className={`brief-panel ${briefWizardStep === "review" ? "brief-panel--review" : ""}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {briefWizardStep === "compose" ?
+              <>
+                <p className="eyebrow">Generate from a brief</p>
+                <h2 className="brief-title">Spell out the deck.</h2>
+                <p className="brief-help">
+                  Audience, purpose, tone, key points. Step one: the AI drafts a slide-by-slide plan. Step two: you
+                  edit it, uncheck slides you do not want, then create the deck.
+                </p>
 
-            <div className="brief-label-row">
-              <label className="field-label brief-label-inline" htmlFor="brief-textarea">
-                The brief
-              </label>
-              {isVoiceSupported() && (
-                <button
-                  type="button"
-                  className={`ghost-button voice-mic-button ${voiceBriefListening ? "active" : ""}`}
-                  onClick={() => toggleVoiceBrief()}
+                <div className="brief-label-row">
+                  <label className="field-label brief-label-inline" htmlFor="brief-textarea">
+                    The brief
+                  </label>
+                  {isVoiceSupported() && (
+                    <button
+                      type="button"
+                      className={`ghost-button voice-mic-button ${voiceBriefListening ? "active" : ""}`}
+                      onClick={() => toggleVoiceBrief()}
+                      disabled={briefRunning}
+                      aria-pressed={voiceBriefListening}
+                    >
+                      {voiceBriefListening ? "Listening…" : "Dictate"}
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  id="brief-textarea"
+                  className="brief-textarea"
+                  rows={9}
+                  placeholder="e.g. 7-slide pitch for a B2B SaaS that automates expense reports for SMBs. Audience: seed-stage VCs. Tone: confident, data-driven, slightly cheeky. Hit the problem, the wedge, the numbers, and the ask."
+                  value={briefText}
+                  onChange={(event) => setBriefText(event.target.value)}
                   disabled={briefRunning}
-                  aria-pressed={voiceBriefListening}
-                >
-                  {voiceBriefListening ? "Listening…" : "Dictate"}
-                </button>
-              )}
-            </div>
-            <textarea
-              id="brief-textarea"
-              className="brief-textarea"
-              rows={9}
-              placeholder="e.g. 7-slide pitch for a B2B SaaS that automates expense reports for SMBs. Audience: seed-stage VCs. Tone: confident, data-driven, slightly cheeky. Hit the problem, the wedge, the numbers, and the ask."
-              value={briefText}
-              onChange={(event) => setBriefText(event.target.value)}
-              disabled={briefRunning}
-            />
+                />
 
-            <div className="brief-row">
-              <label className="field-label" htmlFor="brief-count">
-                # of slides (blank = AI picks)
-              </label>
-              <input
-                id="brief-count"
-                type="number"
-                className="brief-count-input"
-                min={1}
-                max={20}
-                value={briefSlideCount}
-                onChange={(event) => {
-                  const v = event.target.value;
-                  setBriefSlideCount(v === "" ? "" : Math.max(1, Math.min(20, Number(v))));
-                }}
-                disabled={briefRunning}
-              />
-            </div>
+                <div className="brief-row">
+                  <label className="field-label" htmlFor="brief-count">
+                    # of slides (blank = AI picks)
+                  </label>
+                  <input
+                    id="brief-count"
+                    type="number"
+                    className="brief-count-input"
+                    min={1}
+                    max={20}
+                    value={briefSlideCount}
+                    onChange={(event) => {
+                      const v = event.target.value;
+                      setBriefSlideCount(v === "" ? "" : Math.max(1, Math.min(20, Number(v))));
+                    }}
+                    disabled={briefRunning}
+                  />
+                </div>
 
-            <div className="brief-actions">
-              <button
-                className="ghost-button"
-                onClick={() => setBriefOpen(false)}
-                disabled={briefRunning}
-                type="button"
-              >
-                cancel
-              </button>
-              <button
-                className="loud-button"
-                onClick={() => {
-                  void generateFromBrief();
-                }}
-                disabled={briefRunning || !briefText.trim()}
-                type="button"
-              >
-                {briefRunning ? "drafting..." : "Generate deck"}
-              </button>
-            </div>
+                <div className="brief-actions">
+                  <button
+                    className="ghost-button"
+                    onClick={() => setBriefOpen(false)}
+                    disabled={briefRunning}
+                    type="button"
+                  >
+                    cancel
+                  </button>
+                  <button
+                    className="loud-button"
+                    onClick={() => {
+                      void draftOutlineFromBrief();
+                    }}
+                    disabled={briefRunning || !briefText.trim()}
+                    type="button"
+                  >
+                    {briefRunning ? "drafting plan…" : "Draft outline"}
+                  </button>
+                </div>
 
-            <p className="brief-warn">Heads up: this replaces all current slides.</p>
+                <p className="brief-warn">After you approve the plan, creating slides replaces the current deck.</p>
+              </>
+            : <>
+                <p className="eyebrow">Review deck plan</p>
+                <h2 className="brief-title">{briefPlanTitle || "Untitled deck"}</h2>
+                <p className="brief-help">
+                  Edit any field. Uncheck slides to skip them. Only checked slides are added to your deck.
+                </p>
 
-            <div className="template-divider">
-              <span>or pick a template</span>
-            </div>
-
-            <div className="template-grid" role="group" aria-label="Deck templates">
-              {TEMPLATE_LIST.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className="template-card"
-                  onClick={() => applyTemplate(t)}
+                <label className="field-label field-label-soft" htmlFor="brief-plan-deck-title">
+                  Deck title
+                </label>
+                <input
+                  id="brief-plan-deck-title"
+                  type="text"
+                  className="brief-plan-deck-title-input"
+                  value={briefPlanTitle}
+                  onChange={(e) => setBriefPlanTitle(e.target.value)}
                   disabled={briefRunning}
-                >
-                  <div className="template-card-head">
-                    <span className="template-card-name">{t.name}</span>
-                    <span className="template-card-scope">{t.scope}</span>
+                />
+
+                <div className="brief-plan-toolbar">
+                  <div className="brief-plan-toolbar-left" role="group" aria-label="Include all slides">
+                    <button type="button" className="ghost-button" onClick={() => setBriefPlanAllIncluded(true)}>
+                      Check all
+                    </button>
+                    <button type="button" className="ghost-button" onClick={() => setBriefPlanAllIncluded(false)}>
+                      Uncheck all
+                    </button>
                   </div>
-                  <p className="template-card-blurb">{t.blurb}</p>
-                </button>
-              ))}
-            </div>
+                  <span className="brief-plan-count" aria-live="polite">
+                    {briefPlanRows?.filter((r) => r.included).length ?? 0} of {briefPlanRows?.length ?? 0} selected
+                  </span>
+                </div>
+
+                <div className="brief-plan-list" role="list">
+                  {(briefPlanRows ?? []).map((row, index) => (
+                    <article key={row.rowId} className="brief-plan-row" role="listitem">
+                      <div className="brief-plan-row-head">
+                        <label className="brief-plan-checkbox-label">
+                          <input
+                            type="checkbox"
+                            checked={row.included}
+                            onChange={(event) =>
+                              updateBriefPlanRow(row.rowId, { included: event.target.checked })
+                            }
+                            aria-label={`Include slide ${index + 1}: ${row.name || "Untitled"}`}
+                          />
+                          <span className="brief-plan-idx">{index + 1}</span>
+                        </label>
+                      </div>
+                      <div className="brief-plan-fields">
+                        <label className="field-label-soft brief-plan-field-label">Slide title</label>
+                        <input
+                          type="text"
+                          className="brief-plan-line-input"
+                          value={row.name}
+                          onChange={(e) => updateBriefPlanRow(row.rowId, { name: e.target.value })}
+                        />
+                        <label className="field-label-soft brief-plan-field-label">Format</label>
+                        <select
+                          className="brief-plan-format-select"
+                          value={row.suggestedFormat}
+                          onChange={(e) =>
+                            updateBriefPlanRow(row.rowId, {
+                              suggestedFormat: normalizeFormat(e.target.value)
+                            })
+                          }
+                        >
+                          {FORMAT_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <label className="field-label-soft brief-plan-field-label">Prompt (slide content brief)</label>
+                        <textarea
+                          className="brief-textarea brief-plan-prompt-area"
+                          rows={3}
+                          value={row.prompt}
+                          onChange={(e) => updateBriefPlanRow(row.rowId, { prompt: e.target.value })}
+                        />
+                        <label className="field-label-soft brief-plan-field-label">Speaker notes</label>
+                        <textarea
+                          className="brief-textarea brief-plan-notes-area"
+                          rows={2}
+                          value={row.notes}
+                          onChange={(e) => updateBriefPlanRow(row.rowId, { notes: e.target.value })}
+                        />
+                      </div>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="brief-actions brief-actions-split">
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    onClick={() => {
+                      setBriefWizardStep("compose");
+                      setBriefPlanRows(null);
+                      setBriefPlanTitle("");
+                    }}
+                    disabled={briefRunning}
+                  >
+                    Back to brief
+                  </button>
+                  <div className="brief-actions-right">
+                    <button className="ghost-button" type="button" onClick={() => setBriefOpen(false)}>
+                      Cancel
+                    </button>
+                    <button
+                      className="loud-button"
+                      type="button"
+                      disabled={
+                        briefRunning ||
+                        (briefPlanRows?.filter((r) => r.included).length ?? 0) === 0
+                      }
+                      onClick={() => confirmBriefPlanToDeck()}
+                    >
+                      Create{" "}
+                      {briefPlanRows?.filter((r) => r.included).length ?? 0} slide
+                      {(briefPlanRows?.filter((r) => r.included).length ?? 0) === 1 ? "" : "s"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            }
           </div>
         </div>
       )}
