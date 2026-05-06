@@ -2280,7 +2280,6 @@ export default function Home() {
                         </div>
                       : <div className="empty-state">
                           <p>No slide yet.</p>
-                          <span>Use Instructions for AI on the right — then generate.</span>
                         </div>
                       }
                       {isWorking && (
