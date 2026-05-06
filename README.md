@@ -4,8 +4,6 @@
 
 This is my submission for the Valon presentation take-home. The starter was an image-only slide builder; I rebuilt the generation pipeline to be **format-aware** and added a **deck-from-brief** flow. A reviewer reading this should expect the full vitest suite to pass and a working app in under a minute of setup.
 
-> **Demo:** drop a GIF here at `docs/screenshots/deck-from-brief.gif` showing the full flow — type brief → outline appears → cook a few slides → mixed-format deck.
-
 ---
 
 ## What's new vs the starter
