@@ -23,7 +23,6 @@ The original starter would generate one image per slide. That's the wrong format
 - **Share / export menu** — one toolbar control opens a short menu: **Download** (starts `.pptx` download) or **Share link** (copies a compressed `#share=` URL with deck structure, prompts, notes, formats, layout JSON, and the active theme). Image bytes are intentionally omitted (URLs would blow past limits); open the link and **Cook** to regenerate pixels.
 - **Undo / redo** — global **⌘Z** / **⌘⇧Z** (Ctrl on Windows/Linux) for structural deck changes, plus matching **←** / **→** controls in the toolbar; text fields keep the browser’s native undo.
 - **Drag-to-reorder slides** — sidebar thumbnails use **@dnd-kit** sortable reorder; order persists with the rest of the deck.
-- **3 looks** — for image-format slides, runs three parallel image generations with variation hints, then A/B/C thumbnails under the canvas to pick a winner (thumbnails collapse to a single canonical `imageData`).
 - **Voice brief (dictation)** — Web Speech API toggle in the deck-from-brief overlay (Chrome / Edge / Safari; feature-hidden where unsupported). Streams interim text into the brief textarea.
 - **Vitest suite** — unit + integration tests (including share-hash round-trip where `CompressionStream` exists), smoke script for end-to-end against a live dev server. No API key required for the offline tests.
 
