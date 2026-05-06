@@ -18,11 +18,13 @@ The original starter would generate one image per slide. That's the wrong format
 - **Cook all + tiered concurrency** — fires all idle slides in parallel. Layouts unthrottled; image generation capped at 3 in-flight to respect rate limits. Per-slide progress via the same `status` field; `Stop` aborts in-flight requests; `Retry failed` re-runs only the broken ones.
 - **Presenter mode** — full-screen, keyboard navigation (← → space PgUp/PgDn Home/End Esc), speaker-notes drawer (toggle with `N`).
 - **AI slide critique** — multimodal "Critique" button that sends image slides back to the model so it actually sees what it's grading. Returns structured feedback (overall verdict + 0-5 strengths + 0-5 issues with severity, area, and a concrete suggested fix), rendered in a slide-in side drawer.
-- **Theme system + Style Lock** — three preset themes (`editorial`, `monochrome`, `pitch`) plus a "Lock style from this slide" button that extracts a style DNA (palette + mood + image-prompt appendix) from any generated image and applies it across the rest of the deck. One abstraction controls layout slide CSS, image-prompt appendix, and PPTX colors in lockstep — so the same deck stays visually coherent end-to-end.
+- **Theme system + Style Lock** — presets **Default** (`default` id — Valon-aligned cream/gold look), **Monochrome**, and legacy **`pitch`** for older shared decks; optional per-deck **typography** (slide font stacks + scale) under Customize theme. **Lock style from this slide** extracts style DNA (palette + mood + image-prompt appendix) from a generated image and applies it deck-wide. One abstraction controls layout slide CSS, image-prompt appendix, and PPTX colors in lockstep — so the same deck stays visually coherent end-to-end.
 - **Live generation feedback** — elapsed-time counter on every working slide, calibrated phase hints based on (kind, elapsed), shimmer animation across the canvas, accent-colored progress bar, and animated thumbnails. Honest about what's happening — no fake server events.
 - **Classifier reasoning surfaced in the UI** — the floating chip on the canvas shows *why* the AI picked the format it did. No more silent failures.
 - **Real PPTX export for layout slides** — proper text layout, not "image overlay with placeholder rectangle." Each layout type has its own pptxgenjs renderer; the active theme's colors flow through.
-- **Share link** — copy a compressed `#share=` URL with deck structure, prompts, notes, formats, layout JSON, and the active theme. Image bytes are intentionally omitted (URLs would blow past limits); open the link and **Cook** to regenerate pixels.
+- **Share / export menu** — one toolbar control opens a short menu: **Download** (starts `.pptx` download) or **Share link** (copies a compressed `#share=` URL with deck structure, prompts, notes, formats, layout JSON, and the active theme). Image bytes are intentionally omitted (URLs would blow past limits); open the link and **Cook** to regenerate pixels.
+- **Undo / redo** — global **⌘Z** / **⌘⇧Z** (Ctrl on Windows/Linux) for structural deck changes, plus matching **←** / **→** controls in the toolbar; text fields keep the browser’s native undo.
+- **Drag-to-reorder slides** — sidebar thumbnails use **@dnd-kit** sortable reorder; order persists with the rest of the deck.
 - **3 looks** — for image-format slides, runs three parallel image generations with variation hints, then A/B/C thumbnails under the canvas to pick a winner (thumbnails collapse to a single canonical `imageData`).
 - **Voice brief (dictation)** — Web Speech API toggle in the deck-from-brief overlay (Chrome / Edge / Safari; feature-hidden where unsupported). Streams interim text into the brief textarea.
 - **Vitest suite** — unit + integration tests (including share-hash round-trip where `CompressionStream` exists), smoke script for end-to-end against a live dev server. No API key required for the offline tests.
@@ -34,7 +36,7 @@ The original starter would generate one image per slide. That's the wrong format
 ```bash
 cp .env.example .env.local                    # add GOOGLE_API_KEY
 npm install
-npm run dev                                   # http://localhost:3000
+npm run dev                                   # opens on :3000 if free; otherwise Next picks the next port (see terminal)
 ```
 
 Optional env vars:
@@ -45,7 +47,7 @@ Optional env vars:
 
 ```bash
 npm test                  # unit + integration tests, no API key needed
-npm run test:smoke        # end-to-end against http://localhost:3000
+npm run test:smoke        # end-to-end against the dev server URL (defaults to http://localhost:3000)
 npm run typecheck         # strict TS, zero errors
 ```
 
@@ -55,7 +57,7 @@ The smoke script gracefully skips live AI tests when `GOOGLE_API_KEY` isn't set,
 
 ## Architecture
 
-Four AI flows, four routes, all logic in `lib/ai/`. Routes are thin HTTP adapters.
+Four **AI** flows (classify / generate / critique / extract style) mapped to four `POST` routes under `app/api/`; all logic lives in `lib/ai/`. **`POST /api/export`** builds PPTX client-side on the server via pptxgenjs (not a Gemini call). Routes are thin HTTP adapters.
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -98,7 +100,7 @@ generate-slide   generate-outline      critique              extract-style
 
 **Why Gemini Flash-Lite?** Google specifically pitches it for *"high throughput tasks like classification or summarization at scale"* — exactly our workload. ~10x cheaper than Anthropic Haiku and noticeably faster. We don't need reasoning quality here; the classifier output is constrained JSON. Critique and style extraction reuse the same model — Flash-Lite handles multimodal input fine for these structured tasks.
 
-**Why themes as one abstraction?** A theme bundles `cssVars` (layout slide rendering), `pptx` (export colors), and `imagePromptAppendix` (image generation guidance). When you switch theme, all three flip in lockstep — so an image cooked under "Pitch" sits cleanly next to a stats layout cooked under "Pitch" exports as a "Pitch"-themed PPTX. The "locked" theme is constructed at runtime from a style DNA extracted via the VLM, but follows the same Theme shape, so the rest of the system never knows the difference.
+**Why themes as one abstraction?** A theme bundles `cssVars` (layout slide rendering), `pptx` (export colors), `imagePromptAppendix` (image generation guidance), and optional `typography`. When you switch theme, those layers flip in lockstep — so visuals, export, and prompts stay aligned. The **locked** theme is constructed at runtime from a style DNA extracted via the VLM, but follows the same `Theme` shape, so the rest of the system never knows the difference. Persisted decks may still carry the legacy preset id **`editorial`**; hydration maps it to **`default`**.
 
 ---
 
@@ -113,7 +115,7 @@ generate-slide   generate-outline      critique              extract-style
 | **`lib/ai/` separation** | Routes became 25 lines each. Lib functions are pure (input → output, no `Request`/`Response`). Tests can hit them directly without HTTP mocking. |
 | **localStorage for state** | Matches starter spec; no new infra. Base64 slides can exceed the browser ~5 MB/origin quota — the app proactively drops image bytes when the snapshot is oversized or `QuotaExceededError` fires (prompts/layouts still persist; heroes survive until reload in the current tab). |
 | **No streaming yet** | Deferred. Would require server-side orchestration for diminishing returns at 5-15 slide decks. Listed in "What's next." |
-| **Stripped the starter's joke "cheesy" aesthetic** | The original `HOUSE_STYLE_APPENDIX` told the image model to render in Comic Sans with clashing colors, and `globals.css` matched. Funny once; gets in the way of evaluating real output. Replaced with a restrained editorial palette (cream paper, terracotta accent, Inter + Fraunces). The PPTX export was updated to match. A more advanced theming system (extract palette + style DNA from one image, apply to the rest) is the next step — see [`PARKING_LOT.md`](PARKING_LOT.md). |
+| **Stripped the starter's joke "cheesy" aesthetic** | The original `HOUSE_STYLE_APPENDIX` told the image model to render in Comic Sans with clashing colors, and `globals.css` matched. Funny once; gets in the way of evaluating real output. Replaced with a restrained editorial palette (cream paper, accent, Inter + Fraunces). PPTX export matches the active theme. Style Lock (extract DNA from one slide image) ships for cross-slide coherence. |
 
 ---
 
@@ -141,6 +143,7 @@ lib/
     themes.ts                 ← Theme type, presets, buildLockedTheme
   ui/
     working-feedback.ts       ← elapsed-time + workingHint helpers (pure)
+    slide-thumbnail-heading.ts ← sidebar thumb labels (layout / prompt / first-slide name)
   async/
     pool.ts                   ← bounded-concurrency pool with abort support
 
@@ -151,6 +154,8 @@ tests/
 
 scripts/
   smoke-test.mjs              ← end-to-end against running dev server
+
+CLAUDE.md                     ← concise notes for coding agents (this dir)
 ```
 
 ---
@@ -159,11 +164,13 @@ scripts/
 
 Top three only. Everything else is in [`PARKING_LOT.md`](PARKING_LOT.md).
 
-1. **Variants per slide.** Instead of "Again" replacing the current image, show 3 variants side-by-side. Standard creative-tool pattern. The backend already supports `variation: true` — this is mostly a UI change.
-2. **Voice-to-deck.** Whisper API → brief textarea → outline → deck. High wow factor and the architecture supports it cleanly (just another input that produces a brief string).
-3. **Drag-to-reorder slides.** With deck-from-brief producing 5-10 slides at once, reorder is now a real ergonomic gap. `@dnd-kit/sortable` is the reach.
+1. **Real streaming (SSE).** Server-pushed phase events around classifier / layout / image completion so the UI moves past honest elapsed-time hints when the platform allows it.
+2. **Cost estimator.** Pre-flight “~\$X to Cook this deck” from static model pricing × slide mix (classifier + layouts + images).
+3. **Backed share URLs.** Today share is a long `#share=` hash in the URL; a tiny backend (KV or Supabase) could host `slides.example/d/<id>` read-only views without blowing browser URL limits.
 
-Already shipped: AI-routed format selection, deck-from-brief, per-slide format chips, Cook all (tiered concurrency), Presenter mode (keyboard nav + speaker notes), AI slide critique (multimodal), Theme system + Style Lock from any slide (visual DNA extraction), Live generation feedback (elapsed timer + shimmer), and the visual reset.
+Already shipped: AI-routed format selection, deck-from-brief, per-slide format chips, Cook all (tiered concurrency), **3 looks** (A/B/C image picks), Presenter mode (keyboard nav + speaker notes), AI slide critique (multimodal), theme system + typography + Style Lock, Share / export menu, undo/redo + drag-to-reorder thumbnails, voice brief (dictation), live generation feedback, and the visual reset.
+
+For a shorter, tool-oriented recap (commands, theme ids, routes), see **`CLAUDE.md`**.
 
 ---
 
@@ -171,10 +178,11 @@ Already shipped: AI-routed format selection, deck-from-brief, per-slide format c
 
 | | |
 |---|---|
-| Framework | Next.js 16 (App Router), React 19, TypeScript |
-| AI | Gemini 2.5 Flash-Lite (text), Gemini 3 Pro Image Preview (image) |
+| Framework | Next.js **16.2** (App Router), React **19.2**, TypeScript **6** |
+| AI | Gemini 2.5 Flash-Lite (text), Gemini 3 Pro Image Preview (image) — defaults configurable via env |
 | Export | pptxgenjs |
-| Testing | Vitest |
+| DnD | @dnd-kit/core + sortable (slide reorder) |
+| Testing | Vitest **4** |
 | State | React + localStorage (no Zustand, no DB) |
 | Styling | Plain CSS in `globals.css` |
 
