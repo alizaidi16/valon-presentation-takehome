@@ -78,6 +78,11 @@ export function EditableLayoutSlide({ layout, onCommit, disabled }: EditableLayo
   const draftRef = useRef(draft);
   const layoutSig = JSON.stringify(layout);
 
+  const [statsHeadlineOpen, setStatsHeadlineOpen] = useState(() => {
+    if (layout.kind !== "stats") return false;
+    return Boolean((layout as StatsLayout).headline?.trim());
+  });
+
   useEffect(() => {
     const next = cloneLayout(layout);
     setDraft(next);
@@ -88,6 +93,20 @@ export function EditableLayoutSlide({ layout, onCommit, disabled }: EditableLayo
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
+  useEffect(() => {
+    let parsed: SlideLayout;
+    try {
+      parsed = JSON.parse(layoutSig) as SlideLayout;
+    } catch {
+      return;
+    }
+    if (parsed.kind !== "stats") {
+      setStatsHeadlineOpen(false);
+      return;
+    }
+    setStatsHeadlineOpen(Boolean((parsed as StatsLayout).headline?.trim()));
+  }, [layoutSig]);
 
   function flushCommit() {
     onCommit(normalizeCommitted(cloneLayout(draftRef.current)));
@@ -224,20 +243,6 @@ export function EditableLayoutSlide({ layout, onCommit, disabled }: EditableLayo
   }
 
   const s = draft as StatsLayout;
-  const [statsHeadlineOpen, setStatsHeadlineOpen] = useState(
-    () => layout.kind === "stats" && Boolean((layout as StatsLayout).headline?.trim())
-  );
-
-  useEffect(() => {
-    let parsed: SlideLayout;
-    try {
-      parsed = JSON.parse(layoutSig) as SlideLayout;
-    } catch {
-      return;
-    }
-    if (parsed.kind !== "stats") return;
-    setStatsHeadlineOpen(Boolean((parsed as StatsLayout).headline?.trim()));
-  }, [layoutSig]);
 
   return (
     <div className="layout-slide layout-stats layout-slide-editable">
