@@ -2,6 +2,7 @@
 
 import type { CSSProperties } from "react";
 import { useEffect, useId, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   closestCenter,
   DndContext,
@@ -21,15 +22,18 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { pool } from "@/lib/async/pool";
 import type { Critique } from "@/lib/ai/critique";
-import type { StyleDNA } from "@/lib/ai/extract-style";
 import {
-  buildLockedTheme,
   coercePersistedTheme,
   DEFAULT_THEME,
-  PRESET_THEME_LIST,
-  getPresetTheme,
+  DEFAULT_THEME_TYPOGRAPHY,
+  patchThemeColors,
+  patchThemeTypography,
+  THEME_PICKER_PRESETS,
+  PRESET_THEMES,
+  sanitizeHex,
   type Theme,
-  type ThemeId
+  type ThemeFontStack,
+  withDefaultTypography
 } from "@/lib/ai/themes";
 import { elapsedSeconds } from "@/lib/ui/working-feedback";
 import { slideThumbnailHeading } from "@/lib/ui/slide-thumbnail-heading";
@@ -41,6 +45,9 @@ import { isVoiceSupported, startVoiceRecognition, type VoiceController } from "@
 type SlideStatus = "idle" | "working" | "done" | "error";
 type FormatOverride = "auto" | "image" | "title" | "bullets" | "grid" | "stats";
 
+/** Sidebar theme row: `null` when the deck uses a locked-from-slide theme (no preset chip). */
+type ThemeSidebarLane = "default" | "monochrome" | null;
+
 const FORMAT_OPTIONS: Array<{ value: FormatOverride; label: string }> = [
   { value: "auto", label: "auto" },
   { value: "image", label: "image" },
@@ -50,25 +57,73 @@ const FORMAT_OPTIONS: Array<{ value: FormatOverride; label: string }> = [
   { value: "stats", label: "stats" }
 ];
 
+function relSlideLuminance(hex: string): number {
+  const s = sanitizeHex(hex);
+  if (!s) return 0.5;
+  const r = parseInt(s.slice(1, 3), 16) / 255;
+  const g = parseInt(s.slice(3, 5), 16) / 255;
+  const b = parseInt(s.slice(5, 7), 16) / 255;
+  const lin = [r, g, b].map((v) =>
+    v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+  );
+  return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+}
+
 /**
  * Recessed panels on layout slides (stats / grid tiles). Must be scoped with the
  * deck theme — otherwise grid + stat cards keep :root --card-tint and look
  * unchanged when switching themes (especially pitch vs light presets).
  */
 function deriveSlideCardTint(css: Theme["cssVars"]): string {
-  const paper = css.paper.trim().toLowerCase();
-  const bg = css.bg.trim().toLowerCase();
+  const paperSan = sanitizeHex(css.paper) ?? css.paper.trim();
+  const bgSan = sanitizeHex(css.bg) ?? css.bg.trim();
+  const paper = paperSan.toLowerCase();
+  const bg = bgSan.toLowerCase();
+
   if (paper === "#101a2c") {
     return "#181f31";
   }
-  if (paper === "#ffffff" || paper === "#fff") {
-    return bg;
+  /** Imported sites often coerce paper/bg to identical white → cards must still read as tiles. */
+  if (sanitizeHex(css.paper) === sanitizeHex(css.bg) && relSlideLuminance(paperSan) > 0.9) {
+    return `color-mix(in srgb, ${paperSan} 92%, ${css.ink} 8%)`;
   }
-  return bg;
+  if (paper === "#ffffff" || paper === "#fff") {
+    return bgSan;
+  }
+  return bgSan;
 }
 
-/** Deck palette only inside slide surfaces — app chrome keeps :root tokens. */
-function deckThemeScopedStyle(css: Theme["cssVars"]): CSSProperties {
+function slideFontStackVar(stack: ThemeFontStack): string {
+  if (stack === "sans") return "var(--font-sans)";
+  if (stack === "mono") return "var(--font-mono)";
+  return "var(--font-display)";
+}
+
+function activeThemeLane(theme: Theme): "default" | "monochrome" {
+  if (theme.id === "monochrome" || theme.source === "monochrome") return "monochrome";
+  return "default";
+}
+
+function themeSidebarLaneFromTheme(t: Theme): ThemeSidebarLane {
+  if (t.id === "locked") return null;
+  return activeThemeLane(t);
+}
+
+/** Shallow-stable preset apply — avoids `setTheme` no-ops when the canonical preset object equals current state (React compares by identity). */
+function deckPresetClone(id: "default" | "monochrome"): Theme {
+  const p = PRESET_THEMES[id];
+  return withDefaultTypography({
+    ...p,
+    cssVars: { ...p.cssVars },
+    pptx: { ...p.pptx },
+    typography: { ...(p.typography ?? DEFAULT_THEME_TYPOGRAPHY) }
+  });
+}
+
+/** Deck palette + slide typography — app chrome keeps :root tokens. */
+function deckThemeScopedStyle(theme: Theme): CSSProperties {
+  const css = theme.cssVars;
+  const typo = theme.typography ?? DEFAULT_THEME_TYPOGRAPHY;
   const cardTint = deriveSlideCardTint(css);
   return {
     "--bg": css.bg,
@@ -80,11 +135,18 @@ function deckThemeScopedStyle(css: Theme["cssVars"]): CSSProperties {
     "--rule-strong": css.ruleStrong,
     "--accent": css.accent,
     "--accent-soft": css.accentSoft,
-    /** Layout slides use --gold/--card-tint — map from theme tokens so presets diverge visibly. */
     "--gold": css.accent,
     "--gold-soft": css.accentSoft,
-    "--card-tint": cardTint
+    "--card-tint": cardTint,
+    "--font-slide-display": slideFontStackVar(typo.displayFont),
+    "--font-slide-body": slideFontStackVar(typo.bodyFont),
+    "--slide-type-scale": String(typo.slideScale)
   } as CSSProperties;
+}
+
+function toColorInputValue(c: string): string {
+  const h = sanitizeHex(c);
+  return h ?? "#888888";
 }
 
 type TitleLayout = { kind: "title"; headline: string; subtitle?: string };
@@ -121,9 +183,9 @@ type Slide = {
   /** Epoch ms when this slide entered the "working" state. Used to render an
    * elapsed-time counter and to drive the shimmer animation. Cleared on done/error. */
   startedAt?: number;
-  /** Up to 3 alternate image renders from "3 variants". Pick one to keep as `imageData`. */
+  /** Legacy persisted field from older decks; still honored when resolving `slideDisplayImage`. */
   imageVariants?: Array<{ imageData: string; reasoning?: string }>;
-  /** Which entry in `imageVariants` is selected (0..2). Kept in sync with `imageData`. */
+  /** Legacy persisted field; paired with `imageVariants`. */
   imageVariantPick?: number;
 };
 
@@ -189,7 +251,10 @@ type BriefWizardStep = "compose" | "review";
 /** Editable outline row in the brief review step (checkbox + stable React key). */
 type BriefPlanRow = OutlineSlide & { rowId: string; included: boolean };
 
-const STORAGE_KEY = "valon-presentation-takehome-v6";
+const STORAGE_KEY = "valon-presentation-takehome-upstream-reference-v6";
+
+/** Shown in the nav until renamed, after reset, or if the outline has no AI title yet. */
+const DEFAULT_WORKSPACE_TITLE = "Untitled";
 
 /** Default first-slide prompt — must match `makeSlide(0)` for starter detection. */
 const DEFAULT_STARTER_SLIDE_PROMPT =
@@ -393,13 +458,12 @@ function AppLogoMark() {
     >
       <defs>
         <linearGradient id={`app-logo-grad-${gid}`} x1="6" y1="6" x2="16" y2="18" gradientUnits="userSpaceOnUse">
-          <stop stopColor="var(--gold)" />
-          <stop offset="1" stopColor="#d4bc6a" />
+          <stop stopColor="var(--accent)" />
+          <stop offset="1" stopColor="var(--accent-hover)" />
         </linearGradient>
       </defs>
       <rect x="5" y="10" width="19" height="14" rx="3" fill="var(--surface-3)" stroke="var(--rule)" strokeWidth="1" />
       <rect x="9" y="14" width="19" height="14" rx="3" fill="var(--paper)" stroke="var(--rule-strong)" strokeWidth="1" />
-      {/* Gold accent — reference Valon mark */}
       <circle cx="13.5" cy="16.5" r="3.4" fill={`url(#app-logo-grad-${gid})`} />
     </svg>
   );
@@ -418,7 +482,7 @@ function StaticSlideThumb({
   onInsertBelow,
   deleteDisabled,
   deleteTitle,
-  deckThemeCss
+  deckSlideTheme
 }: {
   slide: Slide;
   index: number;
@@ -428,12 +492,12 @@ function StaticSlideThumb({
   onInsertBelow: () => void;
   deleteDisabled: boolean;
   deleteTitle: string;
-  deckThemeCss: Theme["cssVars"];
+  deckSlideTheme: Theme;
 }) {
   const isWorking = slide.status === "working";
   const elapsed = elapsedSeconds(slide.startedAt, Date.now());
   const thumbSrc = slideDisplayImage(slide);
-  const thumbHeading = slideThumbnailHeading(slide);
+  const thumbHeading = slideThumbnailHeading(slide, { listIndex: index });
 
   return (
     <div className={`thumb-shell ${isActive ? "active" : ""}`}>
@@ -473,7 +537,7 @@ function StaticSlideThumb({
       >
         <div
           className="thumb-art"
-          style={slide.layout ? deckThemeScopedStyle(deckThemeCss) : undefined}
+          style={slide.layout ? deckThemeScopedStyle(deckSlideTheme) : undefined}
         >
           {thumbSrc ?
             <img alt={thumbHeading} src={thumbSrc} draggable={false} />
@@ -512,7 +576,7 @@ function SortableThumb({
   onInsertBelow,
   deleteDisabled,
   deleteTitle,
-  deckThemeCss
+  deckSlideTheme
 }: {
   slide: Slide;
   index: number;
@@ -522,7 +586,7 @@ function SortableThumb({
   onInsertBelow: () => void;
   deleteDisabled: boolean;
   deleteTitle: string;
-  deckThemeCss: Theme["cssVars"];
+  deckSlideTheme: Theme;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: slide.id
@@ -530,7 +594,7 @@ function SortableThumb({
   const isWorking = slide.status === "working";
   const elapsed = elapsedSeconds(slide.startedAt, Date.now());
   const thumbSrc = slideDisplayImage(slide);
-  const thumbHeading = slideThumbnailHeading(slide);
+  const thumbHeading = slideThumbnailHeading(slide, { listIndex: index });
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -581,7 +645,7 @@ function SortableThumb({
       >
         <div
           className="thumb-art"
-          style={slide.layout ? deckThemeScopedStyle(deckThemeCss) : undefined}
+          style={slide.layout ? deckThemeScopedStyle(deckSlideTheme) : undefined}
         >
           {thumbSrc ?
             <img alt={thumbHeading} src={thumbSrc} draggable={false} />
@@ -612,6 +676,8 @@ export default function Home() {
   /** When false, defer localStorage writes until share-link / persisted deck hydration finishes — avoids overwriting saved data or burning main-thread time on SSR placeholder state. */
   const [hydrationDone, setHydrationDone] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [shareExportMenuOpen, setShareExportMenuOpen] = useState(false);
+  const shareExportMenuRef = useRef<HTMLDivElement>(null);
   const [briefOpen, setBriefOpen] = useState(false);
   const [briefText, setBriefText] = useState("");
   const [briefSlideCount, setBriefSlideCount] = useState<number | "">(7);
@@ -631,8 +697,6 @@ export default function Home() {
   const cookAbortRef = useRef<AbortController | null>(null);
   /** AbortController for single-slide Cook / Again (not shared with Retry-failed batch). */
   const soloCookAbortRef = useRef<AbortController | null>(null);
-  /** AbortController shared by parallel fetches for "3 looks". */
-  const variantsAbortRef = useRef<AbortController | null>(null);
   /** Per-slide monotonic generation id — bumped on cancel / new cook so stale fetches skip patchSlide. */
   const cookGenRef = useRef<Record<string, number>>({});
   /** Per-slide drafts for the AI edit box (right rail); not persisted. */
@@ -652,15 +716,15 @@ export default function Home() {
   const [presenterIndex, setPresenterIndex] = useState(0);
   const [presenterShowNotes, setPresenterShowNotes] = useState(false);
   const [critiquePanelOpen, setCritiquePanelOpen] = useState(false);
-  /** Active deck theme. Either a preset (selected via the theme picker) or
-   * a "locked" theme extracted from a generated image slide. Persisted to
-   * localStorage so reloads preserve the look. */
+  /** Active deck theme (preset, custom, imported site palette, etc.). Persisted to localStorage. */
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
-  const [lockingStyle, setLockingStyle] = useState(false);
+  /** Set when the user picks a preset/lane/edits/import — hydrate must not overwrite with localStorage if this ran first (effect runs after first paint). */
+  const deckThemeUserTouchedRef = useRef(false);
+  const [themeSidebarLane, setThemeSidebarLane] = useState<ThemeSidebarLane>("default");
   /** dnd-kit assigns unstable ids SSR vs browser — defer sortable rail until mounted. */
   const [slideDndReady, setSlideDndReady] = useState(false);
   /** Visible workspace title in the nav (editable). */
-  const [deckName, setDeckName] = useState("Studio");
+  const [deckName, setDeckName] = useState(DEFAULT_WORKSPACE_TITLE);
   const [deckNameEditing, setDeckNameEditing] = useState(false);
   const [deckNameDraft, setDeckNameDraft] = useState("");
   const deckNameInputRef = useRef<HTMLInputElement | null>(null);
@@ -774,7 +838,9 @@ export default function Home() {
               : (nextSlides[0]?.id ?? "");
             setSlides(nextSlides);
             setSelectedId(selId);
-            setTheme(coercePersistedTheme(decoded.theme));
+            const sharedTheme = coercePersistedTheme(decoded.theme);
+            setTheme(sharedTheme);
+            setThemeSidebarLane(themeSidebarLaneFromTheme(sharedTheme));
             setBriefSectionExpanded(false);
             setThemeSectionExpanded(false);
             historyRef.current.reset();
@@ -832,8 +898,15 @@ export default function Home() {
               : defaultExpanded
             );
           }
-          if (parsed.theme && parsed.theme.cssVars && parsed.theme.pptx) {
-            setTheme(coercePersistedTheme(parsed.theme));
+          if (
+            parsed.theme &&
+            parsed.theme.cssVars &&
+            parsed.theme.pptx &&
+            !deckThemeUserTouchedRef.current
+          ) {
+            const loaded = coercePersistedTheme(parsed.theme);
+            setTheme(loaded);
+            setThemeSidebarLane(themeSidebarLaneFromTheme(loaded));
           }
         } catch {
           const fresh = starterSlides();
@@ -958,6 +1031,10 @@ export default function Home() {
       const isModified = event.metaKey || event.ctrlKey;
       if (!isModified || event.key.toLowerCase() !== "z") return;
 
+      // Holding ⌘Z / Ctrl+Z fires key repeat — each event would pop another snapshot
+      // and feels like "undo wiped everything". One undo per key press only.
+      if (event.repeat) return;
+
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName.toLowerCase();
       if (tag === "input" || tag === "textarea" || target?.isContentEditable) return;
@@ -975,6 +1052,24 @@ export default function Home() {
     // those change so we always operate on current state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slides, selectedId]);
+
+  useEffect(() => {
+    if (!shareExportMenuOpen) return;
+    function onPointerDown(e: MouseEvent) {
+      if (!shareExportMenuRef.current?.contains(e.target as Node)) {
+        setShareExportMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setShareExportMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [shareExportMenuOpen]);
 
   function patchSlide(id: string, patch: Partial<Slide>) {
     setSlides((current) =>
@@ -1287,137 +1382,14 @@ export default function Home() {
     }
   }
 
-  async function exploreImageVariants() {
-    const slide = selectedSlide;
-    if (!slide?.prompt.trim()) {
-      setMessage("Needs a prompt.");
-      return;
-    }
-    const okFormat =
-      slide.suggestedFormat === "image" || slide.kind === "image";
-    if (!okFormat) {
-      setMessage('Use format "image" or cook an image slide first.');
-      return;
-    }
-    if (slide.status === "working") return;
-
-    snapshotForUndo();
-
-    variantsAbortRef.current?.abort();
-    const batch = new AbortController();
-    variantsAbortRef.current = batch;
-
-    patchSlide(slide.id, {
-      status: "working",
-      startedAt: Date.now(),
-      imageVariants: undefined,
-      imageVariantPick: undefined,
-      feedback: "Generating 3 visual variants..."
-    });
-
-    const gen = bumpCookGen(slide.id);
-
-    try {
-      const body = {
-        prompt: slide.prompt,
-        formatOverride: "image" as const,
-        variation: true,
-        styleAppendix: theme.imagePromptAppendix
-      };
-
-      const responses = await Promise.all(
-        [0, 1, 2].map(async () => {
-          const { signal, release } = createGenerationFetchSignal(batch.signal);
-          try {
-            return await fetch("/api/generate", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              signal,
-              body: JSON.stringify(body)
-            });
-          } finally {
-            release();
-          }
-        })
-      );
-
-      const payloads = await Promise.all(responses.map((r) => r.json()));
-
-      if (isStaleCookGen(slide.id, gen)) {
-        return;
-      }
-
-      const variants: Array<{ imageData: string; reasoning?: string }> = [];
-      for (let i = 0; i < 3; i++) {
-        const r = responses[i];
-        const p = payloads[i] as {
-          error?: string;
-          kind?: string;
-          imageData?: string;
-          reasoning?: string;
-        };
-        if (!r.ok || p.error || p.kind !== "image" || !p.imageData) {
-          if (isStaleCookGen(slide.id, gen)) return;
-          patchSlide(slide.id, {
-            status: "error",
-            startedAt: undefined,
-            feedback: p.error ?? `Variant ${i + 1} failed.`
-          });
-          setMessage(p.error ?? "Variant generation failed.");
-          return;
-        }
-        variants.push({ imageData: p.imageData, reasoning: p.reasoning });
-      }
-
-      if (isStaleCookGen(slide.id, gen)) return;
-
-      patchSlide(slide.id, {
-        status: "done",
-        kind: "image",
-        layout: undefined,
-        startedAt: undefined,
-        imageVariants: variants,
-        imageVariantPick: 0,
-        imageData: variants[0].imageData,
-        feedback: "Pick a variant below."
-      });
-      setMessage("Three variants ready — tap A, B, or C.");
-    } catch (e) {
-      if (isStaleCookGen(slide.id, gen)) {
-        return;
-      }
-      const aborted = e instanceof DOMException && e.name === "AbortError";
-      const userStopped = aborted && batch.signal.aborted;
-      patchSlide(slide.id, {
-        status: userStopped ? "idle" : "error",
-        startedAt: undefined,
-        feedback:
-          userStopped ? "Stopped."
-          : aborted ? "Timed out waiting for the model."
-          : e instanceof Error ? e.message
-          : "Network error."
-      });
-      setMessage(
-        userStopped ?
-          "Generation stopped."
-        : aborted ? "Variant request timed out — try Cook or 3 looks again."
-        : e instanceof Error ? e.message
-        : "Network error."
-      );
-    } finally {
-      if (variantsAbortRef.current === batch) {
-        variantsAbortRef.current = null;
-      }
-    }
-  }
-
   /**
    * Tiered batch: layout slides go in parallel (cheap, fast), image/auto slides
    * are throttled to 3 concurrent (rate-limit friendly). Layout slides typically
    * resolve within seconds, giving the user fast visible progress.
    */
-  async function cookAllSlides(opts: { onlyFailed?: boolean } = {}) {
-    const targets = slides.filter((s) => {
+  async function cookAllSlides(opts: { onlyFailed?: boolean; slides?: Slide[] } = {}) {
+    const deck = opts.onlyFailed ? slides : opts.slides ?? slides;
+    const targets = deck.filter((s) => {
       if (opts.onlyFailed) return s.status === "error";
       return s.status !== "done" && s.status !== "working";
     });
@@ -1498,7 +1470,6 @@ export default function Home() {
     }
     bumpCookGen(slide.id);
     soloCookAbortRef.current?.abort();
-    variantsAbortRef.current?.abort();
     patchSlide(slide.id, {
       status: "idle",
       startedAt: undefined,
@@ -1521,7 +1492,7 @@ export default function Home() {
     if (
       typeof window !== "undefined" &&
       !window.confirm(
-        "Reset to the starter deck? This clears all slides (including undo history), the saved browser backup, locks, overlays, and any #share= link in the URL."
+        "Reset to the starter deck? This clears all slides (including undo history), the saved browser backup, overlays, and any #share= link in the URL."
       )
     ) {
       return;
@@ -1531,8 +1502,6 @@ export default function Home() {
     cookAbortRef.current = null;
     soloCookAbortRef.current?.abort();
     soloCookAbortRef.current = null;
-    variantsAbortRef.current?.abort();
-    variantsAbortRef.current = null;
     cookGenRef.current = {};
     stopVoiceBrief();
     setBriefRunning(false);
@@ -1554,7 +1523,9 @@ export default function Home() {
     const fresh = starterSlides();
     setSlides(fresh);
     setSelectedId(fresh[0]?.id ?? "");
+    deckThemeUserTouchedRef.current = false;
     setTheme(DEFAULT_THEME);
+    setThemeSidebarLane("default");
     historyRef.current.reset();
     bumpHistory((n) => n + 1);
 
@@ -1569,8 +1540,7 @@ export default function Home() {
     setCritiquePanelOpen(false);
     setExporting(false);
     setCookingAll(false);
-    setLockingStyle(false);
-    setDeckName("Studio");
+    setDeckName(DEFAULT_WORKSPACE_TITLE);
     setDeckNameEditing(false);
     setDeckNameDraft("");
 
@@ -1631,57 +1601,6 @@ export default function Home() {
     } catch (err) {
       patchSlide(selectedSlide.id, { critiquing: false });
       setMessage(err instanceof Error ? err.message : "Critique failed.");
-    }
-  }
-
-  /**
-   * Extract a style DNA from the selected slide's image and use it as the
-   * deck-wide theme. All future image generations will use the extracted
-   * imagePromptAppendix and layout slides re-skin to the extracted palette on
-   * slide surfaces only (scoped tokens — app chrome stays on Valon defaults).
-   */
-  async function lockStyleFromSelectedSlide() {
-    const src = selectedSlide ? slideDisplayImage(selectedSlide) : undefined;
-    if (!selectedSlide || !src) {
-      setMessage("Lock style only works on a generated image slide.");
-      return;
-    }
-
-    setLockingStyle(true);
-    setMessage("Reading the slide's visual DNA...");
-
-    try {
-      const response = await fetch("/api/extract-style", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageData: src })
-      });
-
-      const payload = (await response.json()) as Partial<StyleDNA> & { error?: string };
-
-      if (
-        !response.ok ||
-        payload.error ||
-        !payload.palette ||
-        !payload.imagePromptAppendix
-      ) {
-        setMessage(payload.error ?? "Style extraction failed.");
-        return;
-      }
-
-      const lockedTheme = buildLockedTheme({
-        palette: payload.palette,
-        mood: payload.mood,
-        imagePromptAppendix: payload.imagePromptAppendix
-      });
-      setTheme(lockedTheme);
-      setMessage(
-        `Locked style: ${lockedTheme.name}. New image slides will match this look.`
-      );
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : "Style extraction failed.");
-    } finally {
-      setLockingStyle(false);
     }
   }
 
@@ -1762,7 +1681,7 @@ export default function Home() {
       const url = window.URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = "valon-presentation-takehome-export.pptx";
+      anchor.download = "valon-presentation-takehome-upstream-reference-export.pptx";
       anchor.click();
       window.URL.revokeObjectURL(url);
       setMessage("Download started.");
@@ -1861,15 +1780,18 @@ export default function Home() {
     const titleForMsg = briefPlanTitle.trim() || "outline";
 
     snapshotForUndo();
-    setSlides(generatedSlides);
-    setSelectedId(generatedSlides[0]?.id ?? "");
-    setBriefSectionExpanded(false);
-    setThemeSectionExpanded(false);
-    setBriefOpen(false);
-    setBriefText("");
-    setMessage(
-      `Created ${generatedSlides.length} slide(s) from deck "${titleForMsg}". Cook slides one by one in Studio — or use Update slide after editing instructions.`
-    );
+    flushSync(() => {
+      const generatedDeckTitle = briefPlanTitle.trim();
+      setDeckName(generatedDeckTitle.length ? generatedDeckTitle : DEFAULT_WORKSPACE_TITLE);
+      setSlides(generatedSlides);
+      setSelectedId(generatedSlides[0]?.id ?? "");
+      setBriefSectionExpanded(false);
+      setThemeSectionExpanded(false);
+      setBriefOpen(false);
+      setBriefText("");
+    });
+    setMessage(`Created ${generatedSlides.length} slide(s) from “${titleForMsg}” — generating…`);
+    void cookAllSlides({ slides: generatedSlides });
   }
 
   return (
@@ -1889,7 +1811,7 @@ export default function Home() {
                 onChange={(e) => setDeckNameDraft(e.target.value)}
                 onBlur={() => {
                   const next = deckNameDraft.trim();
-                  setDeckName(next.length ? next : "Studio");
+                  setDeckName(next.length ? next : DEFAULT_WORKSPACE_TITLE);
                   setDeckNameEditing(false);
                 }}
                 onKeyDown={(e) => {
@@ -1922,7 +1844,7 @@ export default function Home() {
               type="button"
               className="ghost-button app-nav-reset-btn"
               onClick={() => resetFrontend()}
-              disabled={cookingAll || briefRunning || lockingStyle || exporting}
+              disabled={cookingAll || briefRunning || exporting}
               title="Reset to starter deck — clears local snapshot, undo/redo stack, overlays, URL hash."
               aria-label="Reset app to starter deck"
             >
@@ -1941,7 +1863,7 @@ export default function Home() {
               title="Undo (⌘Z)"
               aria-label="Undo"
             >
-              ↶
+              ←
             </button>
             <button
               className="ghost-button icon-button"
@@ -1951,7 +1873,7 @@ export default function Home() {
               title="Redo (⌘⇧Z)"
               aria-label="Redo"
             >
-              ↷
+              →
             </button>
             <span className="app-toolbar-divider" aria-hidden />
             <button
@@ -1963,24 +1885,55 @@ export default function Home() {
             >
               Present ▶
             </button>
-            <button
-              className="ghost-button"
-              onClick={() => {
-                void copyShareLink();
-              }}
-              type="button"
-              title="Compressed link with outlines and theme — image bytes stay local"
-            >
-              Share link
-            </button>
-            <button
-              className="ghost-button"
-              disabled={exporting}
-              onClick={exportDeck}
-              type="button"
-            >
-              {exporting ? "packing..." : "PPT-ish"}
-            </button>
+            <div className="app-share-export-dropdown" ref={shareExportMenuRef}>
+              <button
+                type="button"
+                className="ghost-button app-share-export-trigger"
+                aria-expanded={shareExportMenuOpen}
+                aria-haspopup="menu"
+                aria-controls="share-export-menu"
+                onClick={() => setShareExportMenuOpen((open) => !open)}
+              >
+                Share / export
+                <span className="app-share-export-caret" aria-hidden>
+                  ▾
+                </span>
+              </button>
+              {shareExportMenuOpen ?
+                <div
+                  id="share-export-menu"
+                  role="menu"
+                  aria-label="Export and share"
+                  className="app-share-export-panel"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="app-share-export-item"
+                    disabled={exporting || !slides.length}
+                    title="Download a .pptx of this deck"
+                    onClick={() => {
+                      setShareExportMenuOpen(false);
+                      void exportDeck();
+                    }}
+                  >
+                    {exporting ? "Downloading…" : "Download"}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="app-share-export-item"
+                    title="Compressed link with outlines and theme — image bytes stay local"
+                    onClick={() => {
+                      setShareExportMenuOpen(false);
+                      void copyShareLink();
+                    }}
+                  >
+                    Share link
+                  </button>
+                </div>
+              : null}
+            </div>
           </nav>
         </div>
       </header>
@@ -2052,53 +2005,132 @@ export default function Home() {
                 <span aria-hidden>▴</span>
               </button>
             </div>
-            <div className="theme-chips" role="group" aria-label="Theme picker">
-              {PRESET_THEME_LIST.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={`theme-chip ${theme.id === t.id ? "active" : ""}`}
-                  onClick={() => setTheme(t)}
-                  title={t.blurb}
-                >
-                  <span className="theme-swatch" aria-hidden>
-                    <span style={{ background: t.cssVars.paper }} />
-                    <span style={{ background: t.cssVars.ink }} />
-                    <span style={{ background: t.cssVars.accent }} />
-                  </span>
-                  <span>{t.name}</span>
-                </button>
-              ))}
-            </div>
-            {theme.id === "locked" && (
-              <div className="theme-locked-row">
-                <span className="theme-locked-label" title={theme.blurb}>
-                  ⚲ {theme.name}
-                </span>
-                <button
-                  className="theme-unlock"
-                  type="button"
-                  onClick={() => setTheme(DEFAULT_THEME)}
-                >
-                  unlock
-                </button>
+            <div className="theme-picker-stack">
+              <div className="theme-chips" role="group" aria-label="Deck theme">
+                {THEME_PICKER_PRESETS.map((t) => {
+                  const laneKey = t.id === "monochrome" ? "monochrome" : "default";
+                  const active = themeSidebarLane === laneKey;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className="theme-chip"
+                      aria-pressed={active}
+                      onClick={() => {
+                        deckThemeUserTouchedRef.current = true;
+                        setThemeSidebarLane(laneKey);
+                        setTheme(deckPresetClone(t.id as "default" | "monochrome"));
+                      }}
+                      title={t.blurb}
+                    >
+                      <span className="theme-swatch" aria-hidden>
+                        <span style={{ background: t.cssVars.paper }} />
+                        <span style={{ background: t.cssVars.ink }} />
+                        <span style={{ background: t.cssVars.accent }} />
+                      </span>
+                      <span className="theme-chip-label">{t.name}</span>
+                    </button>
+                  );
+                })}
               </div>
-            )}
-            <button
-              className="ghost-button theme-lock-button"
-              type="button"
-              disabled={!slideDisplayImage(selectedSlide) || lockingStyle}
-              onClick={() => {
-                void lockStyleFromSelectedSlide();
-              }}
-              title={
-                selectedSlide && slideDisplayImage(selectedSlide)
-                  ? "Use this slide's palette + style for the rest of the deck"
-                  : "Cook an image slide first, then lock its style"
-              }
-            >
-              {lockingStyle ? "reading..." : "Lock style from this slide"}
-            </button>
+            </div>
+            <details className="theme-customize">
+              <summary>Customize theme · colors &amp; typography</summary>
+              <div
+                className="theme-customize-body"
+                onPointerDownCapture={() => {
+                  deckThemeUserTouchedRef.current = true;
+                }}
+              >
+              <div className="theme-custom-grid">
+                <label className="theme-custom-field">
+                  <span className="theme-custom-field-label">Paper (slide face)</span>
+                  <input
+                    type="color"
+                    value={toColorInputValue(theme.cssVars.paper)}
+                    onChange={(e) => setTheme(patchThemeColors(theme, { paper: e.target.value }))}
+                  />
+                </label>
+                <label className="theme-custom-field">
+                  <span className="theme-custom-field-label">Ground (outside slide)</span>
+                  <input
+                    type="color"
+                    value={toColorInputValue(theme.cssVars.bg)}
+                    onChange={(e) => setTheme(patchThemeColors(theme, { bg: e.target.value }))}
+                  />
+                </label>
+                <label className="theme-custom-field">
+                  <span className="theme-custom-field-label">Ink (text)</span>
+                  <input
+                    type="color"
+                    value={toColorInputValue(theme.cssVars.ink)}
+                    onChange={(e) => setTheme(patchThemeColors(theme, { ink: e.target.value }))}
+                  />
+                </label>
+                <label className="theme-custom-field">
+                  <span className="theme-custom-field-label">Accent</span>
+                  <input
+                    type="color"
+                    value={toColorInputValue(theme.cssVars.accent)}
+                    onChange={(e) => setTheme(patchThemeColors(theme, { accent: e.target.value }))}
+                  />
+                </label>
+                <label className="theme-custom-field">
+                  <span className="theme-custom-field-label">Display font (titles)</span>
+                  <select
+                    value={theme.typography?.displayFont ?? DEFAULT_THEME_TYPOGRAPHY.displayFont}
+                    onChange={(e) =>
+                      setTheme(patchThemeTypography(theme, { displayFont: e.target.value as ThemeFontStack }))
+                    }
+                  >
+                    <option value="serif">Serif (Cormorant)</option>
+                    <option value="sans">Sans (Albert Sans)</option>
+                    <option value="mono">Mono (Geist)</option>
+                  </select>
+                </label>
+                <label className="theme-custom-field">
+                  <span className="theme-custom-field-label">Body font</span>
+                  <select
+                    value={theme.typography?.bodyFont ?? DEFAULT_THEME_TYPOGRAPHY.bodyFont}
+                    onChange={(e) =>
+                      setTheme(patchThemeTypography(theme, { bodyFont: e.target.value as ThemeFontStack }))
+                    }
+                  >
+                    <option value="sans">Sans (Albert Sans)</option>
+                    <option value="serif">Serif (Cormorant)</option>
+                    <option value="mono">Mono (Geist)</option>
+                  </select>
+                </label>
+                <label className="theme-custom-field theme-custom-field-span">
+                  <span className="theme-custom-field-label">
+                    Slide type scale · {(theme.typography?.slideScale ?? 1).toFixed(2)}×
+                  </span>
+                  <input
+                    className="theme-slide-scale"
+                    type="range"
+                    min={0.85}
+                    max={1.35}
+                    step={0.02}
+                    value={theme.typography?.slideScale ?? 1}
+                    onChange={(e) =>
+                      setTheme(patchThemeTypography(theme, { slideScale: Number(e.target.value) }))
+                    }
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                className="ghost-button theme-reset-preset-row"
+                onClick={() => {
+                  deckThemeUserTouchedRef.current = true;
+                  setTheme(deckPresetClone("default"));
+                  setThemeSidebarLane("default");
+                }}
+              >
+                Reset to default preset
+              </button>
+              </div>
+            </details>
           </div>
         : <div className="sidebar-theme-collapsed" aria-label="Theme (collapsed)">
             <div className="sidebar-panel-collapsed-row">
@@ -2167,7 +2199,7 @@ export default function Home() {
                     onInsertBelow={() => insertSlideBelow(index)}
                     deleteDisabled={slides.length <= 1}
                     deleteTitle={slides.length <= 1 ? "One slide is required" : "Delete this slide"}
-                    deckThemeCss={theme.cssVars}
+                    deckSlideTheme={theme}
                   />
                 ))}
               </div>
@@ -2185,7 +2217,7 @@ export default function Home() {
                 onInsertBelow={() => insertSlideBelow(index)}
                 deleteDisabled={slides.length <= 1}
                 deleteTitle={slides.length <= 1 ? "One slide is required" : "Delete this slide"}
-                deckThemeCss={theme.cssVars}
+                deckSlideTheme={theme}
               />
             ))}
           </div>
@@ -2200,7 +2232,6 @@ export default function Home() {
           const hasRendered = slideHasRenderedContent(selectedSlide);
           const primaryDisabled =
             cookingAll ||
-            lockingStyle ||
             briefRunning ||
             isWorking ||
             (!hasRendered && !(selectedSlide?.prompt ?? "").trim());
@@ -2211,7 +2242,7 @@ export default function Home() {
                   <div className="canvas-card-wrap">
                     <div
                       className={`canvas-card ${isWorking ? "is-working" : ""}`}
-                      style={deckThemeScopedStyle(theme.cssVars)}
+                      style={deckThemeScopedStyle(theme)}
                     >
                       {selectedSlide?.kind === "layout" && selectedSlide.layout ?
                         <LayoutSlide layout={selectedSlide.layout} />
@@ -2234,42 +2265,6 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-
-                {selectedSlide &&
-                  selectedSlide.imageVariants &&
-                  selectedSlide.imageVariants.length > 1 &&
-                  selectedSlide.status !== "working" && (
-                    <div className="variant-strip" role="group" aria-label="Image variants">
-                      {selectedSlide.imageVariants.map((v, i) => (
-                        <button
-                          key={i}
-                          type="button"
-                          className={`variant-thumb ${(selectedSlide.imageVariantPick ?? 0) === i ? "active" : ""}`}
-                          onClick={() =>
-                          patchSlide(selectedSlide.id, {
-                            imageVariantPick: i,
-                            imageData: v.imageData
-                          })
-                          }
-                        >
-                          <span className="variant-thumb-label">{String.fromCharCode(65 + i)}</span>
-                          <img alt="" src={v.imageData} draggable={false} />
-                        </button>
-                      ))}
-                      <button
-                        type="button"
-                        className="ghost-button variant-dismiss"
-                        onClick={() =>
-                          patchSlide(selectedSlide.id, {
-                            imageVariants: undefined,
-                            imageVariantPick: undefined
-                          })
-                        }
-                      >
-                        collapse
-                      </button>
-                    </div>
-                  )}
 
                 {selectedSlide && (
                   <div className="editor-notes-block">
@@ -2313,7 +2308,7 @@ export default function Home() {
                       }
                       placeholder='Message, visuals, tone, hierarchy—anything the model should follow for this slide.'
                       rows={6}
-                      disabled={isWorking || cookingAll || lockingStyle || briefRunning}
+                      disabled={isWorking || cookingAll || briefRunning}
                       value={selectedSlide.prompt ?? ""}
                     />
                   : <textarea
@@ -2327,7 +2322,7 @@ export default function Home() {
                       }}
                       placeholder='e.g. "Change bullet 4 to …" — leave blank to rerun from your original slide instructions'
                       rows={7}
-                      disabled={isWorking || cookingAll || lockingStyle || briefRunning}
+                      disabled={isWorking || cookingAll || briefRunning}
                     />
                   }
 
@@ -2379,23 +2374,6 @@ export default function Home() {
                     <button
                       className="ghost-button slide-ai-wide"
                       disabled={
-                        selectedSlide.status === "working" ||
-                        !(
-                          selectedSlide.suggestedFormat === "image" ||
-                          selectedSlide.kind === "image"
-                        )
-                      }
-                      onClick={() => {
-                        void exploreImageVariants();
-                      }}
-                      title="Runs three parallel image generations (different compositions)"
-                      type="button"
-                    >
-                      3 looks
-                    </button>
-                    <button
-                      className="ghost-button slide-ai-wide"
-                      disabled={
                         selectedSlide.status !== "done" ||
                         selectedSlide.critiquing ||
                         (!slideDisplayImage(selectedSlide) && !selectedSlide.layout)
@@ -2439,7 +2417,7 @@ export default function Home() {
               setPresenterIndex((i) => Math.min(slides.length - 1, i + 1));
             }
           }}>
-            <div className="presenter-stage" style={deckThemeScopedStyle(theme.cssVars)}>
+            <div className="presenter-stage" style={deckThemeScopedStyle(theme)}>
               {slide.kind === "layout" && slide.layout ? (
                 <LayoutSlide layout={slide.layout} />
               ) : presenterImg ? (
@@ -2447,7 +2425,7 @@ export default function Home() {
               ) : (
                 <div className="presenter-empty">
                   <p>{slide.name}</p>
-                  <span>Use Instructions for AI in Studio to generate this slide.</span>
+                  <span>Use Instructions for AI below to generate this slide.</span>
                 </div>
               )}
             </div>
@@ -2710,6 +2688,7 @@ export default function Home() {
                       type="button"
                       disabled={
                         briefRunning ||
+                        cookingAll ||
                         (briefPlanRows?.filter((r) => r.included).length ?? 0) === 0
                       }
                       onClick={() => confirmBriefPlanToDeck()}

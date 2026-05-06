@@ -1,27 +1,36 @@
 /**
- * Theme system. A Theme bundles together everything that controls the visual
- * identity of a deck: CSS custom properties for layout slides, hex values for
- * the PPTX exporter, an image-prompt appendix that shapes generated images,
- * and a font pairing.
- *
- * Why this lives in lib/ai/: themes are an input to the image generator
- * (via imagePromptAppendix). They're not a UI concern alone; they're a
- * lever the AI uses too.
- *
- * "Locked" themes (extracted via lib/ai/extract-style.ts from a generated
- * image) are constructed at runtime and follow the same Theme shape, so the
- * rest of the app doesn't need to know whether a theme is preset or extracted.
+ * Theme system. Controls layout slide CSS vars, PPTX colors, image-prompt appendix,
+ * and optional typography for slides.
  */
 
-export type ThemeId = "editorial" | "monochrome" | "pitch" | "locked";
+export type ThemeId = "default" | "monochrome" | "pitch" | "custom" | "locked";
+
+/** Which template the user started from when using a custom (non-preset) theme. */
+export type ThemeSource = "default" | "monochrome";
+
+export type ThemeFontStack = "serif" | "sans" | "mono";
+
+export type ThemeTypography = {
+  displayFont: ThemeFontStack;
+  bodyFont: ThemeFontStack;
+  /** 0.85–1.35, scales layout slide type (via CSS var). */
+  slideScale: number;
+};
+
+export const DEFAULT_THEME_TYPOGRAPHY: ThemeTypography = {
+  displayFont: "serif",
+  bodyFont: "sans",
+  slideScale: 1
+};
 
 export type Theme = {
   id: ThemeId;
+  /** Where this theme came from when id is custom or when user edited a preset. */
+  source?: ThemeSource;
   /** Human-readable label for the picker. */
   name: string;
   /** One-sentence description for tooltips/help. */
   blurb: string;
-  /** CSS custom properties applied to <html> / overridden on the deck root. */
   cssVars: {
     bg: string;
     paper: string;
@@ -33,8 +42,6 @@ export type Theme = {
     accent: string;
     accentSoft: string;
   };
-  /** Hex (no #) values for the PPTX exporter. Mirrors cssVars but PPTX needs
-   * the format pptxgenjs expects. */
   pptx: {
     paper: string;
     ink: string;
@@ -42,16 +49,16 @@ export type Theme = {
     accent: string;
     rule: string;
   };
-  /** Appended to every image-generation prompt. Should be 5-8 lines describing
-   * palette, typography, composition rules, and aesthetic. */
   imagePromptAppendix: string;
+  typography?: ThemeTypography;
 };
 
-const THEMES: Record<Exclude<ThemeId, "locked">, Theme> = {
-  editorial: {
-    id: "editorial",
-    name: "Brand",
-    blurb: "Matches valon.ai tokens — Valon Gold + Base ramps, serif display / sans UI.",
+const THEMES: Record<"default" | "monochrome" | "pitch", Theme> = {
+  default: {
+    id: "default",
+    source: "default",
+    name: "Default",
+    blurb: "Cream paper, gold highlights, editorial serif + sans — matches Valon marketing tokens.",
     cssVars: {
       bg: "#f8f6f3",
       paper: "#ffffff",
@@ -76,11 +83,13 @@ cream-and-stone Base ramp backgrounds (#fffdfa, #f8f6f3, #ece4dd) and deep Base 
 Composition: generous whitespace, cards defined by soft shadow and subtle tone (no heavy borders),
 large high-contrast serif headlines, clean geometric sans for body and UI when text appears.
 Avoid terracotta/orange that is not the official gold, rainbow gradients, glossy 3D, stock clip-art, and busy dashboards.
-`.trim()
+`.trim(),
+    typography: { ...DEFAULT_THEME_TYPOGRAPHY }
   },
 
   monochrome: {
     id: "monochrome",
+    source: "monochrome",
     name: "Monochrome",
     blurb: "Off-white + ink. No accent color. Maximum restraint.",
     cssVars: {
@@ -108,13 +117,15 @@ Composition: think New York Times opinion-section illustration or a Pentagram po
 Typography (if any): clean grotesk or transitional serif, no embellishment.
 Absolutely no color besides black, white, and warm gray. No gradients, no shadows, no 3D.
 Treat as a high-contrast print-ready illustration.
-`.trim()
+`.trim(),
+    typography: { displayFont: "serif", bodyFont: "sans", slideScale: 1 }
   },
 
   pitch: {
     id: "pitch",
+    source: "default",
     name: "Pitch deck",
-    blurb: "Deep navy ground, electric accent. For high-stakes pitches.",
+    blurb: "Deep navy ground, electric accent. Legacy preset for shared decks.",
     cssVars: {
       bg: "#0d1623",
       paper: "#101a2c",
@@ -140,18 +151,35 @@ Color palette: dark navy base, warm off-white text/figure, single electric accen
 Typography (if any): bold modern sans-serif (think Inter Display or Söhne Bold).
 No softness, no gradients, no decorative flourishes. Treat as a Stripe / Linear / Vercel-grade product visual.
 Edges should be crisp, contrast should be punchy.
-`.trim()
+`.trim(),
+    typography: { displayFont: "sans", bodyFont: "sans", slideScale: 1 }
   }
 };
 
 export const PRESET_THEMES = THEMES;
 
-export const PRESET_THEME_LIST: Theme[] = [THEMES.editorial, THEMES.monochrome, THEMES.pitch];
+/** Shown in sidebar: Default + Monochrome. */
+export const THEME_PICKER_PRESETS: Theme[] = [THEMES.default, THEMES.monochrome];
 
-export const DEFAULT_THEME = THEMES.editorial;
+export const DEFAULT_THEME = THEMES.default;
+
+function normalizeThemeTypography(t?: ThemeTypography): ThemeTypography {
+  if (!t) return { ...DEFAULT_THEME_TYPOGRAPHY };
+  const slideScale = Math.min(1.4, Math.max(0.8, t.slideScale || 1));
+  return {
+    displayFont: t.displayFont === "mono" || t.displayFont === "sans" ? t.displayFont : "serif",
+    bodyFont: t.bodyFont === "mono" || t.bodyFont === "serif" ? t.bodyFont : "sans",
+    slideScale
+  };
+}
+
+/** Attach defaults for older persisted themes missing typography. */
+export function withDefaultTypography(theme: Theme): Theme {
+  return { ...theme, typography: normalizeThemeTypography(theme.typography) };
+}
 
 /** True when parsed JSON matches a minimal persisted Theme-like object. */
-function isThemeShape(raw: unknown): raw is Partial<Theme> & { id: ThemeId } {
+export function isThemeShape(raw: unknown): raw is Partial<Theme> & { id: ThemeId } {
   if (!raw || typeof raw !== "object") return false;
   const o = raw as Record<string, unknown>;
   const cv = o.cssVars;
@@ -178,47 +206,128 @@ function isThemeShape(raw: unknown): raw is Partial<Theme> & { id: ThemeId } {
 }
 
 /**
- * After localStorage/share decode — snap preset ids to the canonical preset
- * (so Brand picks up codebase palette tweaks) and gate "locked" to a minimal
- * valid shape so partial JSON cannot poison state.
+ * Hydration: snap known presets to canonical; accept custom/locked payloads;
+ * migrate legacy `editorial` id → default.
  */
 export function coercePersistedTheme(raw: unknown): Theme {
-  if (!raw || typeof raw !== "object") return DEFAULT_THEME;
-  const partial = raw as Partial<Theme> & { id?: string };
-  if (partial.id === "editorial" || partial.id === "monochrome" || partial.id === "pitch") {
-    return THEMES[partial.id];
+  if (!raw || typeof raw !== "object") return withDefaultTypography(DEFAULT_THEME);
+  const o = raw as Record<string, unknown>;
+
+  /** Legacy share/localStorage used `editorial` before rename to `default`. */
+  const rawId = typeof o.id === "string" ? o.id : "";
+  const migrateId = rawId === "editorial" ? "default" : rawId;
+
+  if (migrateId === "default" || migrateId === "monochrome" || migrateId === "pitch") {
+    return withDefaultTypography(THEMES[migrateId]);
   }
-  if (partial.id === "locked" && isThemeShape(raw)) {
-    return raw as Theme;
+  if ((migrateId === "custom" || migrateId === "locked") && isThemeShape(raw)) {
+    let t = raw as Theme;
+    const legacySrc = (raw as Record<string, unknown>).source;
+    if (legacySrc === "website") {
+      t = {
+        ...t,
+        source: "default",
+        name: t.name === "From website" || !t.name?.trim() ? "Custom theme" : t.name
+      };
+    }
+    return withDefaultTypography(t);
   }
-  return DEFAULT_THEME;
+  return withDefaultTypography(DEFAULT_THEME);
 }
 
 export function getPresetTheme(id: string): Theme | null {
-  if (id === "editorial" || id === "monochrome" || id === "pitch") {
+  if (id === "default" || id === "monochrome" || id === "pitch") {
     return THEMES[id];
+  }
+  if (id === "editorial") {
+    return THEMES.default;
   }
   return null;
 }
 
+export function buildCustomThemeFromPalette(input: {
+  paper: string;
+  ink: string;
+  accent: string;
+  bg: string;
+  name?: string;
+  source: ThemeSource;
+  /** Optional — defaults to a palette-driven appendix for image prompts. */
+  imagePromptAppendix?: string;
+}): Theme {
+  const paper = sanitizeHex(input.paper) ?? DEFAULT_THEME.cssVars.paper;
+  const ink = sanitizeHex(input.ink) ?? DEFAULT_THEME.cssVars.ink;
+  const accent = sanitizeHex(input.accent) ?? DEFAULT_THEME.cssVars.accent;
+  const bg = sanitizeHex(input.bg) ?? paper;
+
+  const appendix =
+    input.imagePromptAppendix?.trim() ||
+    `
+Brand-aligned visuals using this palette: paper ${paper}, dominant ink ${ink}, accent ${accent}, ground ${bg}.
+Composition: clean editorial slide layout, generous margins, restrained decoration.
+Typography: professional pairing—serif for headlines when formal, geometric sans otherwise.
+Absolutely no clipart watermarks or stock-photo poses. One clear focal idea per slide.
+`.trim();
+
+  return withDefaultTypography({
+    id: "custom",
+    source: input.source,
+    name: input.name?.trim() || "Custom theme",
+    blurb: "User-edited or imported palette.",
+    cssVars: {
+      bg,
+      paper,
+      ink,
+      inkSoft: rgbaFromHex(ink, 0.72),
+      inkMuted: rgbaFromHex(ink, 0.5),
+      rule: rgbaFromHex(ink, 0.14),
+      ruleStrong: rgbaFromHex(ink, 0.28),
+      accent,
+      accentSoft: rgbaFromHex(accent, 0.16)
+    },
+    pptx: {
+      paper: stripHash(paper),
+      ink: stripHash(ink),
+      inkSoft: stripHash(ink),
+      accent: stripHash(accent),
+      rule: DEFAULT_THEME.pptx.rule
+    },
+    imagePromptAppendix: appendix,
+    typography: { ...DEFAULT_THEME_TYPOGRAPHY }
+  });
+}
+
+/**
+ * Duplicate a preset (or any theme) into an editable custom copy.
+ */
+export function forkThemeAsCustom(base: Theme, label?: string): Theme {
+  return withDefaultTypography({
+    ...base,
+    id: "custom",
+    source:
+      base.source === "monochrome" ? "monochrome" : "default",
+    name: label?.trim() || `${base.name} (edited)`,
+    blurb: "Customized theme.",
+    typography: normalizeThemeTypography(base.typography)
+  });
+}
+
 /**
  * Build a runtime "locked" theme from a style DNA extracted from a slide image.
- * Inherits typography + structure from the editorial preset, overrides palette
- * + image appendix from the extracted DNA. Falls back to the editorial preset
- * for any field the extractor didn't return.
  */
 export function buildLockedTheme(dna: {
   palette: { paper: string; ink: string; accent: string };
   mood?: string;
   imagePromptAppendix: string;
 }): Theme {
-  const base = THEMES.editorial;
+  const base = THEMES.default;
   const paper = sanitizeHex(dna.palette.paper) ?? base.cssVars.paper;
   const ink = sanitizeHex(dna.palette.ink) ?? base.cssVars.ink;
   const accent = sanitizeHex(dna.palette.accent) ?? base.cssVars.accent;
 
-  return {
+  return withDefaultTypography({
     id: "locked",
+    source: "default",
     name: dna.mood ? `Locked (${dna.mood})` : "Locked from slide",
     blurb: "Palette + style extracted from a generated slide.",
     cssVars: {
@@ -239,14 +348,11 @@ export function buildLockedTheme(dna: {
       accent: stripHash(accent),
       rule: base.pptx.rule
     },
-    imagePromptAppendix: dna.imagePromptAppendix
-  };
+    imagePromptAppendix: dna.imagePromptAppendix,
+    typography: { ...DEFAULT_THEME_TYPOGRAPHY }
+  });
 }
 
-/**
- * Validate hex colors. Accepts "#abc" / "#abcdef"; returns the 6-char form
- * lowercased and prefixed, or null if it's not a valid hex string.
- */
 export function sanitizeHex(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim().toLowerCase();
@@ -271,4 +377,60 @@ function rgbaFromHex(hex: string, alpha: number): string {
   const g = parseInt(sanitized.slice(3, 5), 16);
   const b = parseInt(sanitized.slice(5, 7), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
+ * Apply partial color updates; re-derives soft ink/accent from hex when solid colors change.
+ */
+export function patchThemeColors(theme: Theme, patch: Partial<Theme["cssVars"]>): Theme {
+  const next = { ...theme.cssVars, ...patch };
+  const solidInk = sanitizeHex(next.ink) ?? theme.cssVars.ink;
+  const solidAccent = sanitizeHex(next.accent) ?? theme.cssVars.accent;
+  const solidPaper = sanitizeHex(next.paper) ?? theme.cssVars.paper;
+  const solidBg = sanitizeHex(next.bg) ?? theme.cssVars.bg;
+
+  const cssVars: Theme["cssVars"] = {
+    bg: solidBg,
+    paper: solidPaper,
+    ink: solidInk,
+    accent: solidAccent,
+    inkSoft: next.inkSoft.startsWith("rgba") ? next.inkSoft : rgbaFromHex(solidInk, 0.72),
+    inkMuted: next.inkMuted.startsWith("rgba") ? next.inkMuted : rgbaFromHex(solidInk, 0.5),
+    rule: next.rule.startsWith("rgba") ? next.rule : rgbaFromHex(solidInk, 0.14),
+    ruleStrong: next.ruleStrong.startsWith("rgba") ? next.ruleStrong : rgbaFromHex(solidInk, 0.28),
+    accentSoft: next.accentSoft.startsWith("rgba") ? next.accentSoft : rgbaFromHex(solidAccent, 0.16)
+  };
+
+  const wasPreset = theme.id === "default" || theme.id === "monochrome" || theme.id === "pitch";
+
+  return withDefaultTypography({
+    ...theme,
+    id: wasPreset || theme.id === "locked" ? "custom" : theme.id,
+    source:
+      theme.source ??
+      (theme.id === "monochrome" ? "monochrome" : "default"),
+    name: wasPreset ? `${THEMES[theme.id as "default" | "monochrome" | "pitch"].name} (edited)` : theme.name,
+    cssVars,
+    pptx: {
+      paper: stripHash(cssVars.paper),
+      ink: stripHash(cssVars.ink),
+      inkSoft: stripHash(cssVars.ink),
+      accent: stripHash(cssVars.accent),
+      rule: theme.pptx.rule
+    }
+  });
+}
+
+export function patchThemeTypography(theme: Theme, patch: Partial<ThemeTypography>): Theme {
+  const typography = normalizeThemeTypography({ ...DEFAULT_THEME_TYPOGRAPHY, ...theme.typography, ...patch });
+  const wasPreset = theme.id === "default" || theme.id === "monochrome" || theme.id === "pitch";
+  return withDefaultTypography({
+    ...theme,
+    id: wasPreset || theme.id === "locked" ? "custom" : theme.id,
+    source:
+      theme.source ??
+      (theme.id === "monochrome" ? "monochrome" : "default"),
+    name: wasPreset ? `${THEMES[theme.id as "default" | "monochrome" | "pitch"].name} (edited)` : theme.name,
+    typography
+  });
 }

@@ -8,9 +8,20 @@ export type SlideThumbnailHeadingInput = {
 
 /**
  * Label for sidebar thumbnails: layout headline when available, else first line
- * of prompt (truncated), else `name`.
+ * of prompt (truncated), else `name`. When `listIndex === 0`, uses `name` when
+ * non-empty so the first thumb matches the slide title.
  */
-export function slideThumbnailHeading(slide: SlideThumbnailHeadingInput): string {
+export function slideThumbnailHeading(
+  slide: SlideThumbnailHeadingInput,
+  options?: { listIndex?: number }
+): string {
+  if (options?.listIndex === 0) {
+    const n = slide.name.trim();
+    if (n) {
+      return n.length > 72 ? `${n.slice(0, 69)}…` : n;
+    }
+  }
+
   const layout = slide.layout;
   if (layout) {
     switch (layout.kind) {

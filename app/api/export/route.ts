@@ -23,9 +23,8 @@ type SlidePayload = {
 type ExportBody = {
   title?: string;
   slides?: SlidePayload[];
-  /** Either a preset theme id ("editorial" | "monochrome" | "pitch"), or
-   * a full theme object (used when the deck has a "locked" style extracted
-   * from a generated image). Defaults to editorial when omitted. */
+  /** Either a preset theme id ("default" | "monochrome" | "pitch"), or
+   * a full theme object (locked/custom from the deck). Defaults to default when omitted. */
   theme?: string | Theme;
 };
 
@@ -299,7 +298,7 @@ function renderLayoutSlide(slide: pptxgen.Slide, layout: LayoutPayload, c: Theme
 /**
  * Resolve the theme from a request body. Accepts a preset id, a full theme
  * object (for "locked" themes extracted from a slide), or nothing (defaults
- * to editorial). Validates that arbitrary objects have the .pptx field we
+ * to default). Validates that arbitrary objects have the .pptx field we
  * need so a malformed payload doesn't throw mid-render.
  */
 function resolveTheme(input: ExportBody["theme"]): Theme {
@@ -385,7 +384,7 @@ export async function POST(request: Request) {
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "Content-Disposition": 'attachment; filename="valon-presentation-takehome-export.pptx"'
+        "Content-Disposition": 'attachment; filename="valon-presentation-takehome-upstream-reference-export.pptx"'
       }
     });
   } catch (error) {

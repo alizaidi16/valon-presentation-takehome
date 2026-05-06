@@ -27,7 +27,7 @@
   --color-base-800: #31231b;
   --color-base-900: #20190f;
   --color-base-950: #231810;
-  /* Studio chrome — warm terracotta primary CTAs (distinct from Valon logo gold). */
+  /* Studio chrome — terracotta primary CTAs + logo accent (--gold kept for slides / marks). */
   --color-terracotta: #c45e3c;
   --color-terracotta-hover: #a85236;
   --color-terracotta-soft: color-mix(in srgb, var(--color-terracotta) 22%, transparent);
@@ -327,7 +327,7 @@ button {
 
 .theme-card-panel-head {
   align-items: center;
-  margin-bottom: 2px;
+  margin-bottom: 10px;
 }
 
 .sidebar-panel-icon-btn {
@@ -643,6 +643,70 @@ button {
   flex-wrap: wrap;
 }
 
+.app-share-export-dropdown {
+  position: relative;
+}
+
+.app-share-export-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-share-export-caret {
+  font-size: 0.72rem;
+  line-height: 1;
+  opacity: 0.88;
+  margin-top: 1px;
+}
+
+.app-share-export-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 12rem;
+  padding: 6px;
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  border: 1px solid rgba(26, 20, 16, 0.1);
+  box-shadow: var(--elev-2);
+  z-index: 60;
+}
+
+.app-share-export-item {
+  display: flex;
+  width: 100%;
+  margin: 0;
+  padding: 10px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.app-share-export-item:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.app-share-export-item:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 2px var(--focus-inset, var(--accent)),
+    0 0 0 3px var(--gold-soft);
+}
+
+.app-share-export-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 textarea {
   width: 100%;
   border: none;
@@ -772,19 +836,6 @@ textarea:focus {
   box-shadow: inset 0 0 0 1px rgba(26, 20, 16, 0.04), var(--elev-2);
 }
 
-.variant-strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: flex-start;
-  gap: 8px;
-  padding: 10px 12px;
-  border-radius: var(--radius-md);
-  border: none;
-  background: var(--surface-2);
-  box-shadow: var(--elev-1);
-}
-
 .editor-notes-block {
   padding: 14px 16px;
   border-radius: var(--radius-md);
@@ -823,51 +874,6 @@ textarea:focus {
   font-size: 0.95rem;
 }
 
-.variant-thumb {
-  position: relative;
-  padding: 0;
-  border: none;
-  border-radius: 4px;
-  background: var(--paper);
-  cursor: pointer;
-  overflow: hidden;
-  width: 72px;
-  height: 40.5px;
-  flex-shrink: 0;
-  box-shadow: 0 0 0 1px rgba(26, 20, 16, 0.08), var(--elev-1);
-  transition: box-shadow 120ms ease;
-}
-
-.variant-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.variant-thumb.active {
-  box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-soft), var(--elev-2);
-}
-
-.variant-thumb-label {
-  position: absolute;
-  top: 2px;
-  left: 3px;
-  z-index: 1;
-  font-size: 0.65rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--paper);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
-  pointer-events: none;
-}
-
-.variant-dismiss {
-  align-self: center;
-  font-size: 0.78rem;
-  padding: 6px 10px;
-}
-
 .brief-label-row {
   display: flex;
   align-items: center;
@@ -903,6 +909,30 @@ textarea:focus {
 
 .field-label-soft {
   opacity: 0.88;
+}
+
+/* Theme editor: <label> is inline by default — stack caption above color/select/range inputs. */
+.theme-custom-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+.theme-custom-field > .theme-custom-field-label {
+  display: block;
+  font-size: 0.7rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink-soft);
+  line-height: 1.35;
+}
+
+.theme-custom-field-span {
+  grid-column: 1 / -1;
 }
 
 .loud-button,
@@ -1488,7 +1518,7 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   padding: 5% 7%;
-  font-family: var(--font-sans);
+  font-family: var(--font-slide-body, var(--font-sans));
   background: var(--paper);
   overflow: hidden;
   color: var(--ink);
@@ -1504,8 +1534,8 @@ textarea:focus {
 
 .ls-headline {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(2rem, 5.5vw, 5rem);
+  font-family: var(--font-slide-display, var(--font-display));
+  font-size: clamp(calc(2rem * var(--slide-type-scale, 1)), calc(5.5vw * var(--slide-type-scale, 1)), calc(5rem * var(--slide-type-scale, 1)));
   font-weight: 500;
   letter-spacing: -0.02em;
   color: var(--ink);
@@ -1514,7 +1544,7 @@ textarea:focus {
 
 .ls-subtitle {
   margin: 0;
-  font-size: clamp(1rem, 2.2vw, 1.7rem);
+  font-size: clamp(calc(1rem * var(--slide-type-scale, 1)), calc(2.2vw * var(--slide-type-scale, 1)), calc(1.7rem * var(--slide-type-scale, 1)));
   color: var(--ink-soft);
   line-height: 1.4;
   max-width: 80%;
@@ -1523,8 +1553,8 @@ textarea:focus {
 /* Bullets / Grid / Stats shared headline */
 .ls-section-headline {
   margin: 0 0 3% 0;
-  font-family: var(--font-display);
-  font-size: clamp(1rem, 2.6vw, 2rem);
+  font-family: var(--font-slide-display, var(--font-display));
+  font-size: clamp(calc(1rem * var(--slide-type-scale, 1)), calc(2.6vw * var(--slide-type-scale, 1)), calc(2rem * var(--slide-type-scale, 1)));
   font-weight: 500;
   letter-spacing: -0.01em;
   color: var(--ink);
@@ -1564,7 +1594,7 @@ textarea:focus {
   display: flex;
   align-items: flex-start;
   gap: 2.5%;
-  font-size: clamp(0.8rem, 1.9vw, 1.4rem);
+  font-size: clamp(calc(0.8rem * var(--slide-type-scale, 1)), calc(1.9vw * var(--slide-type-scale, 1)), calc(1.4rem * var(--slide-type-scale, 1)));
   line-height: 1.4;
   padding: 1.4% 1.2%;
   border-bottom: none;
@@ -1573,7 +1603,8 @@ textarea:focus {
 }
 
 .ls-bullet-item:nth-child(even) {
-  background: rgba(255, 255, 255, 0.22);
+  /* Theme-aware zebra — fixed white washes out on imported white `#paper`. */
+  background: color-mix(in srgb, var(--ink) 5%, var(--paper) 95%);
 }
 
 .ls-bullet-item:last-child {
@@ -1590,8 +1621,10 @@ textarea:focus {
   margin-top: 0.5em;
 }
 
-/* Grid layout */
+/* Grid layout — must be closed before stats/thumbnail rules */
 .layout-grid {
+  gap: 0;
+}
 
 .ls-grid-items {
   display: grid;
@@ -1616,8 +1649,8 @@ textarea:focus {
 
 .ls-grid-title {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(0.85rem, 1.8vw, 1.3rem);
+  font-family: var(--font-slide-display, var(--font-display));
+  font-size: clamp(calc(0.85rem * var(--slide-type-scale, 1)), calc(1.8vw * var(--slide-type-scale, 1)), calc(1.3rem * var(--slide-type-scale, 1)));
   font-weight: 500;
   color: var(--ink);
   letter-spacing: -0.005em;
@@ -1626,7 +1659,7 @@ textarea:focus {
 
 .ls-grid-body {
   margin: 0;
-  font-size: clamp(0.7rem, 1.35vw, 0.95rem);
+  font-size: clamp(calc(0.7rem * var(--slide-type-scale, 1)), calc(1.35vw * var(--slide-type-scale, 1)), calc(0.95rem * var(--slide-type-scale, 1)));
   color: var(--ink-soft);
   flex: 1;
   line-height: 1.45;
@@ -1662,8 +1695,8 @@ textarea:focus {
 
 .ls-stat-value {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: clamp(2rem, 5.5vw, 4.5rem);
+  font-family: var(--font-slide-display, var(--font-display));
+  font-size: clamp(calc(2rem * var(--slide-type-scale, 1)), calc(5.5vw * var(--slide-type-scale, 1)), calc(4.5rem * var(--slide-type-scale, 1)));
   font-weight: 500;
   color: var(--accent);
   line-height: 1;
@@ -1673,7 +1706,7 @@ textarea:focus {
 
 .ls-stat-label {
   margin: 0;
-  font-size: clamp(0.7rem, 1.4vw, 1rem);
+  font-size: clamp(calc(0.7rem * var(--slide-type-scale, 1)), calc(1.4vw * var(--slide-type-scale, 1)), calc(1rem * var(--slide-type-scale, 1)));
   color: var(--ink-soft);
   line-height: 1.35;
 }
@@ -1808,108 +1841,227 @@ textarea:focus {
 /* ── Theme picker ─────────────────────────────────────────── */
 
 .theme-card {
-  margin: 0 0 10px;
-  padding: 12px 12px 14px;
+  margin: 0 0 14px;
+  padding: 18px 16px 18px;
   border: none;
-  border-radius: 8px;
-  background: var(--surface-2);
-  box-shadow: var(--elev-1);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(
+    155deg,
+    color-mix(in srgb, var(--surface-2) 88%, var(--paper) 12%) 0%,
+    var(--surface-2) 52%,
+    color-mix(in srgb, var(--surface-2) 92%, var(--color-gold-100) 8%) 100%
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(26, 20, 16, 0.05),
+    var(--elev-1);
   display: grid;
-  gap: 10px;
+  gap: 16px;
 }
 
 .theme-card .eyebrow {
   margin: 0;
 }
 
-.theme-chips {
+.theme-picker-stack {
   display: grid;
-  gap: 6px;
+  gap: 14px;
 }
 
-.theme-chip {
+.theme-chips {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  row-gap: 14px;
+  column-gap: 0;
+  gap: 14px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 0 4px;
+}
+
+.theme-customize-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.theme-customize {
+  border: none;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.58);
+  padding: 0 14px 14px;
+  margin-top: 6px;
+  box-shadow:
+    inset 0 0 0 1px rgba(26, 20, 16, 0.07),
+    var(--elev-1);
+}
+
+.theme-customize summary {
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  list-style: none;
+  padding: 14px 0 13px;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.theme-customize summary:hover {
+  color: var(--ink);
+}
+
+.theme-customize[open] summary {
+  padding-bottom: 12px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--ink);
+}
+
+.theme-customize summary::-webkit-details-marker {
+  display: none;
+}
+
+/**
+ * Single-column: sidebar (~280px) makes two cramped columns wrap mid-label.
+ */
+.theme-custom-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  padding-top: 2px;
+}
+
+.theme-custom-grid input[type="color"] {
+  width: 100%;
+  height: 32px;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.theme-custom-grid select {
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+  box-shadow: inset 0 0 0 1px rgba(26, 20, 16, 0.08), var(--elev-1);
+}
+
+.theme-slide-scale {
+  width: 100%;
+  margin: 4px 0 0 0;
+}
+
+.theme-reset-preset-row {
+  margin-top: 12px;
+  width: 100%;
+}
+
+/**
+ * Sidebar theme chips: high-specificity + aria-pressed terracotta selection
+ * (avoid generic `.active` collisions; match loud-button / format-chip).
+ */
+.sidebar .theme-card button.theme-chip {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
+  gap: 12px;
+  width: 100%;
+  margin: 0;
+  padding: 13px 16px;
   border: none;
-  background: rgba(255, 255, 255, 0.72);
-  border-radius: 6px;
+  border-radius: 12px;
   text-align: left;
-  font-size: 0.82rem;
-  font-weight: 500;
-  color: var(--ink);
-  transition: box-shadow 100ms ease, background 100ms ease;
+  font-family: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink, #20190f);
+  background: rgba(255, 255, 255, 0.78);
   cursor: pointer;
-  box-shadow: var(--elev-1);
+  appearance: none;
+  -webkit-appearance: none;
+  transition:
+    box-shadow 150ms ease,
+    background 150ms ease,
+    color 150ms ease,
+    transform 80ms ease;
+  box-shadow:
+    inset 0 0 0 1px rgba(26, 20, 16, 0.1),
+    0 2px 14px rgba(26, 20, 16, 0.07);
 }
 
-.theme-chip:hover {
-  background: rgba(255, 255, 255, 0.9);
+.sidebar .theme-card button.theme-chip:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
-.theme-chip.active {
-  background: var(--paper);
-  box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--accent-soft);
+.sidebar .theme-card button.theme-chip:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 2px var(--accent, #c45e3c),
+    0 0 0 4px var(--accent-soft, rgba(196, 94, 60, 0.22)),
+    0 2px 14px rgba(26, 20, 16, 0.08);
+}
+
+.sidebar .theme-card button.theme-chip:hover:not([aria-pressed="true"]) {
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent, #c45e3c) 32%, transparent),
+    0 4px 22px rgba(26, 20, 16, 0.09);
+}
+
+.sidebar .theme-card button.theme-chip[aria-pressed="true"] {
+  background: var(--accent, #c45e3c);
+  color: var(--paper, #ffffff);
+  box-shadow:
+    0 3px 18px rgba(196, 94, 60, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.sidebar .theme-card button.theme-chip[aria-pressed="true"]:hover {
+  background: var(--accent-hover, #a85236);
+  color: var(--paper, #ffffff);
+}
+
+.sidebar .theme-card .theme-chip-label {
+  flex: 1;
+  min-width: 0;
+  letter-spacing: 0.015em;
+  line-height: 1.35;
+}
+
+.sidebar .theme-card button.theme-chip[aria-pressed="true"] .theme-chip-label {
+  color: var(--paper, #ffffff);
 }
 
 .theme-swatch {
   display: inline-flex;
-  height: 18px;
-  width: 36px;
-  border-radius: 3px;
+  height: 24px;
+  width: 44px;
+  border-radius: 6px;
   overflow: hidden;
   border: none;
   flex-shrink: 0;
-  box-shadow: 0 1px 2px rgba(26, 20, 16, 0.12);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    0 1px 4px rgba(26, 20, 16, 0.18);
+}
+
+.sidebar .theme-card button.theme-chip[aria-pressed="true"] .theme-swatch {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 0 0 2px rgba(255, 255, 253, 0.55),
+    0 2px 6px rgba(26, 20, 16, 0.2);
 }
 
 .theme-swatch span {
   flex: 1;
-}
-
-.theme-locked-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  background: linear-gradient(
-    135deg,
-    var(--gold-soft) 0%,
-    rgba(253, 251, 247, 0.95) 100%
-  );
-  border-radius: var(--radius-sm);
-  border: none;
-  box-shadow: var(--elev-1);
-}
-
-.theme-locked-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--ink);
-  letter-spacing: 0.02em;
-}
-
-.theme-unlock {
-  background: transparent;
-  border: none;
-  color: var(--ink-soft);
-  font-size: 0.72rem;
-  text-transform: lowercase;
-  letter-spacing: 0.05em;
-  cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 3px;
-}
-
-.theme-unlock:hover {
-  background: rgba(26, 20, 16, 0.06);
-  color: var(--ink);
-}
-
-.theme-lock-button {
-  font-size: 0.78rem;
-  padding: 8px 10px;
 }
 
 /* ── Critique drawer ─────────────────────────────────────────── */
@@ -2076,7 +2228,7 @@ textarea:focus {
   position: absolute;
   left: 0;
   top: 0;
-  color: #5e8f5e;
+  color: var(--accent, #c45e3c);
   font-weight: 700;
 }
 
