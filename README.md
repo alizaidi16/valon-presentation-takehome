@@ -25,6 +25,8 @@ The original starter would generate one image per slide. That's the wrong format
 - **Drag-to-reorder slides** — sidebar thumbnails use **@dnd-kit** sortable reorder; order persists with the rest of the deck.
 - **Voice brief (dictation)** — Web Speech API toggle in the deck-from-brief overlay (Chrome / Edge / Safari; feature-hidden where unsupported). Streams interim text into the brief textarea.
 - **Vitest suite** — unit + integration tests (including share-hash round-trip where `CompressionStream` exists), smoke script for end-to-end against a live dev server. No API key required for the offline tests.
+- **Edit on the slide** — layout slides (`title` / `bullets` / `grid` / `stats`) are editable **in the canvas** (textareas/inputs sync to slide `layout` JSON on blur, with undo). Image slides show an on-slide **slide title** field (`slide.name`). Presenter mode stays read-only and uses the same `LayoutSlide` markup as before.
+- **Edit vs present layout parity** — slide typography scales with the **slide frame**, not the browser window (`cqw` in `clamp()` plus `container-type: size` on `.canvas-card` and `.presenter-stage`), so editor and full-screen Present match. Image fills use **`object-fit: contain`** on a black letterbox like Present. Stats slides only show an optional section headline when there is real headline text (edit mode offers **+ Section headline** when empty); stat **value** inputs use the same large accent / small label font sizes as read-only paragraphs so numbers don’t look inverted vs labels.
 
 ---
 
@@ -141,6 +143,7 @@ lib/
   ui/
     working-feedback.ts       ← elapsed-time + workingHint helpers (pure)
     slide-thumbnail-heading.ts ← sidebar thumb labels (layout / prompt / first-slide name)
+    editable-layout-slide.tsx  ← in-canvas editing for layout JSON (title / bullets / grid / stats)
   async/
     pool.ts                   ← bounded-concurrency pool with abort support
 
@@ -165,7 +168,7 @@ Top three only. Everything else is in [`PARKING_LOT.md`](PARKING_LOT.md).
 2. **Cost estimator.** Pre-flight “~\$X to Cook this deck” from static model pricing × slide mix (classifier + layouts + images).
 3. **Backed share URLs.** Today share is a long `#share=` hash in the URL; a tiny backend (KV or Supabase) could host `slides.example/d/<id>` read-only views without blowing browser URL limits.
 
-Already shipped: AI-routed format selection, deck-from-brief, per-slide format chips, Cook all (tiered concurrency), **3 looks** (A/B/C image picks), Presenter mode (keyboard nav + speaker notes), AI slide critique (multimodal), theme system + typography + Style Lock, Share / export menu, undo/redo + drag-to-reorder thumbnails, voice brief (dictation), live generation feedback, and the visual reset.
+Already shipped: AI-routed format selection, deck-from-brief, per-slide format chips, Cook all (tiered concurrency), **3 looks** (A/B/C image picks), Presenter mode (keyboard nav + speaker notes), AI slide critique (multimodal), theme system + typography + Style Lock, Share / export menu, undo/redo + drag-to-reorder thumbnails, voice brief (dictation), live generation feedback, **in-canvas layout editing** + **edit/present typography parity** (`cqw` slide container), and the visual reset.
 
 For a shorter, tool-oriented recap (commands, theme ids, routes), see **`CLAUDE.md`**.
 

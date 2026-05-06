@@ -1,8 +1,28 @@
 # Parking lot
 
-Ideas that came up while building this take-home but didn't ship. Kept here so the README's "What's next" stays curated to the top three.
+Ideas that came up while building this take-home but didn't ship. Kept here so the README's "What's next" stays curated to the top three. *(Several older items—sidebar reorder, undo/redo—have since shipped; see README "What's new.")*
 
 Format per item: **what / why now / size / sketch.** Sized in rough hour buckets (S = ~2h, M = ~half a day, L = a full day or more).
+
+---
+
+## Rich text and inline formatting on layout slides
+
+**What:** Move beyond plain string fields and textarea editing: **bold / italic**, multiple sizes, links, optional accent color on runs of text. Persist structured content (e.g. a small JSON tree or a constrained Markdown subset) and render it identically in **Present**, **PPTX export**, and the editor.
+
+**Why later:** Today `SlideLayout` stores flat strings (`headline`, `bullets[]`, etc.). Rich text needs a schema migration, a focused editor (not raw textarea), and export paths in pptxgenjs for mixed runs.
+
+**Size:** L. Schema + WYSIWYG surface + regression tests across four layout kinds.
+
+---
+
+## Manual layout primitives (text boxes, shapes, drawing)
+
+**What:** Let users **add** free-positioned elements on a slide—text boxes, rectangles/circles/lines, maybe pasted icons—not only the AI-filled layout templates. Implies a lightweight canvas layer (z-order, drag, snap, optional multi-select).
+
+**Why later:** Different product shape than structured layouts; needs hit-testing, persistence model (`elements[]` with `x/y/w/h/rotation`), and PPTX export mapping to native shapes or fallbacks.
+
+**Size:** L for a credible v1; XL if approaching Figma/Keynote parity.
 
 ---
 
@@ -23,26 +43,6 @@ Format per item: **what / why now / size / sketch.** Sized in rough hour buckets
 **Why later:** Useful only once Conserge-style usage limits or per-customer billing exist. For a take-home, it adds noise.
 
 **Size:** S. Just a static lookup table of model prices × an estimator that walks the slide list.
-
----
-
-## Drag-to-reorder slides
-
-**What:** Drag a thumbnail in the sidebar to reorder slides.
-
-**Why later:** Add slide / delete slide are the high-frequency operations; reorder is rare in a 5-15 slide deck. Worth it once decks get bigger.
-
-**Size:** S. Reach for `@dnd-kit/sortable`, swap the `slides` array on drop, persist via the existing localStorage hook.
-
----
-
-## Undo / redo
-
-**What:** Cmd+Z reverts the last slide change (cook, edit, delete, reorder).
-
-**Why later:** With localStorage persistence and a 5-15 slide ceiling, the cost of a mistake is low. Becomes important once we have collaborative editing or paid tiers where a wasted image costs real money.
-
-**Size:** M. Needs a small command-pattern abstraction over the slide store; currently slides are mutated in-place via `setSlides`.
 
 ---
 

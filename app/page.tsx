@@ -36,6 +36,7 @@ import {
   withDefaultTypography
 } from "@/lib/ai/themes";
 import { elapsedSeconds } from "@/lib/ui/working-feedback";
+import { EditableLayoutSlide } from "@/lib/ui/editable-layout-slide";
 import { slideThumbnailHeading } from "@/lib/ui/slide-thumbnail-heading";
 import { HistoryStack } from "@/lib/history/stack";
 import { normalizeFormat } from "@/lib/ai/helpers";
@@ -426,9 +427,10 @@ function LayoutSlide({ layout }: { layout: SlideLayout }) {
   }
 
   if (layout.kind === "stats") {
+    const hl = (layout.headline ?? "").trim();
     return (
       <div className="layout-slide layout-stats">
-        {layout.headline && <p className="ls-section-headline">{layout.headline}</p>}
+        {hl ? <p className="ls-section-headline">{hl}</p> : null}
         <div className="ls-stats-row">
           {layout.stats.map((stat, i) => (
             <div key={i} className="ls-stat-item">
@@ -2245,13 +2247,37 @@ export default function Home() {
                       style={deckThemeScopedStyle(theme)}
                     >
                       {selectedSlide?.kind === "layout" && selectedSlide.layout ?
-                        <LayoutSlide layout={selectedSlide.layout} />
-                      : displayImg ?
-                        <img
-                          alt={selectedSlide.name}
-                          className="slide-image"
-                          src={displayImg}
+                        <EditableLayoutSlide
+                          layout={selectedSlide.layout}
+                          disabled={isWorking || cookingAll || briefRunning}
+                          onCommit={(next) => {
+                            const prev = selectedSlide.layout;
+                            if (!prev || JSON.stringify(next) === JSON.stringify(prev)) return;
+                            snapshotForUndo();
+                            patchSlide(selectedSlide.id, { layout: next });
+                          }}
                         />
+                      : displayImg ?
+                        <div className="canvas-image-editable-wrap">
+                          <img
+                            alt={selectedSlide.name}
+                            className="slide-image"
+                            src={displayImg}
+                          />
+                          <div className="canvas-slide-title-bar">
+                            <input
+                              type="text"
+                              className="canvas-slide-title-input"
+                              autoComplete="off"
+                              aria-label="Slide title"
+                              disabled={isWorking || cookingAll || briefRunning}
+                              value={selectedSlide.name}
+                              onChange={(e) =>
+                                patchSlide(selectedSlide.id, { name: e.target.value })
+                              }
+                            />
+                          </div>
+                        </div>
                       : <div className="empty-state">
                           <p>No slide yet.</p>
                           <span>Use Instructions for AI on the right — then generate.</span>

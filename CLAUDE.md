@@ -34,9 +34,16 @@ npm run test:smoke           # needs a running dev server
 | `app/api/extract-style` | Style lock (VLM DNA) |
 | `app/api/export` | PPTX (**not** a generative route) |
 | `lib/ai/themes.ts` | `Theme` type, presets, `buildLockedTheme`, `coercePersistedTheme` (migrates legacy `editorial` → `default`, `source: website` → `default`) |
+| `lib/ui/editable-layout-slide.tsx` | In-canvas editors for layout JSON (`title` / `bullets` / `grid` / `stats`); commits on blur; **stats** optional headline matches read-only (hidden when empty, **+ Section headline** to add) |
 | `lib/ui/slide-thumbnail-heading.ts` | Thumbnail labels; pass `{ listIndex }` so the **first** thumb uses `slide.name` when set |
 
 There is **no** server route to import a palette from an external website (that flow was removed).
+
+## Slide surface: edit vs present
+
+- **Layout slides:** `EditableLayoutSlide` in the main canvas; Present / thumbnails use read-only `LayoutSlide` (`app/page.tsx`).
+- **Sizing:** `.canvas-card` and `.presenter-stage` use **`container-type: size`** so `clamp(..., …cqw, …)` layout typography scales with the **slide**, not `vw`. Generic `.layout-slide-editable input.ls-editable-field` used to set `font-size: inherit` — **stat value/label inputs** override with the same **clamp** sizes as `.ls-stat-value` / `.ls-stat-label` so big numbers / small labels match Present.
+- **Images:** Editor stack uses **`object-fit: contain`** + black ground under the image (aligned with Present). Editable **slide title** = `slide.name`.
 
 ## Themes (important)
 
@@ -50,6 +57,7 @@ There is **no** server route to import a palette from an external website (that 
 - Toolbar **Share / export**: one control; menu items **Download** (.pptx) and **Share link** (clipboard).
 - **Undo / redo**: toolbar ← / → and global **⌘Z** / **⌘⇧Z** (skipped when focus is in text fields).
 - **First thumbnail** heading: `slideThumbnailHeading(slide, { listIndex: index })`.
+- Rich **inline formatting** and **manual shapes/text boxes** are not implemented — see [`PARKING_LOT.md`](PARKING_LOT.md).
 
 ## Tests
 
